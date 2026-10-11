@@ -6,7 +6,7 @@
 
 使用 Android Studio 打开本目录。项目需要 Android SDK Platform 36 和 Build Tools 36.0.0。运行 `gradle assembleDebug` 可构建 Debug APK。
 
-APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。客户端可以在注册页填写 HTTPS 服务器地址。构建者也可以通过 Gradle 属性 `LIUBAI_API_URL` 预填地址；不要把真实服务器地址、令牌或密码提交到公开仓库。
+APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。安装包默认连接 `https://47.112.23.214`，登录页的“服务器设置”可更改地址；构建者也可以通过 Gradle 属性 `LIUBAI_API_URL` 或同名环境变量覆盖默认值。公开 API 地址会随客户端发布；不要提交服务器密码、令牌、`JWT_SECRET` 或 `JAMENDO_CLIENT_ID`。
 
 ## 后端服务
 

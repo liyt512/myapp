@@ -49,7 +49,9 @@
   }
 
   function normalizeServer(value) {
-    const url = new URL(String(value || '').trim());
+    const server = String(value || '').trim();
+    if (!server) throw new Error('请输入服务器地址；普通用户安装应用后会自动连接。');
+    const url = new URL(server);
     if (url.protocol !== 'https:' && !(url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1'))) {
       throw new Error('服务器地址需要使用 HTTPS。');
     }
@@ -99,6 +101,7 @@
       '.auth-card label{display:block;font-size:11px;color:#666;margin:12px 0 6px}',
       '.auth-card input{width:100%;padding:12px 13px;border:1px solid #deded8;border-radius:13px;background:#fff;outline:none;font-size:13px}',
       '.auth-card input:focus{border-color:#171717}',
+      '.server-settings input{margin-top:0}',
       '.auth-actions{display:flex;gap:9px;margin-top:17px}',
       '.auth-actions button,.account-actions button{flex:1;border:1px solid #171717;background:#171717;color:#fff;border-radius:18px;padding:11px 14px;font-size:12px}',
       '.auth-actions button.secondary,.account-actions button.secondary{background:#fff;color:#171717;border-color:#deded8}',
@@ -129,7 +132,7 @@
     layer.innerHTML = '<section class="auth-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">' +
       '<div class="eyebrow">&gt;,&lt;　留白账号</div><h2 id="authTitle">注册一个账号</h2>' +
       '<p>账号和日常保存在服务器上。把账号名告诉朋友，他们就能搜索并添加你。</p>' +
-      '<label for="serverAddress">服务器地址</label><input id="serverAddress" type="url" inputmode="url" placeholder="https://服务器IP" autocomplete="url">' +
+      '<details class="server-settings" id="serverSettings"><summary>服务器设置（一般不需要修改）</summary><label for="serverAddress">服务器地址</label><input id="serverAddress" type="url" inputmode="url" placeholder="https://服务器IP" autocomplete="url"><small>默认已连接留白服务器；只有更换服务器时才需要修改。</small></details>' +
       '<label for="authUsername">账号名</label><input id="authUsername" maxlength="24" autocomplete="username" placeholder="3–24 位字母、数字或下划线">' +
       '<div id="nicknameField"><label for="authNickname">昵称</label><input id="authNickname" maxlength="24" autocomplete="nickname" placeholder="朋友看到的名字"></div>' +
       '<label for="authPassword">密码</label><input id="authPassword" type="password" maxlength="128" autocomplete="new-password" placeholder="至少 8 位">' +
@@ -138,6 +141,7 @@
       '<button class="auth-switch" id="authSwitch" type="button">已有账号？登录</button></section>';
     document.body.appendChild(layer);
     document.getElementById('serverAddress').value = apiBase;
+    document.getElementById('serverSettings').open = !apiBase;
     document.getElementById('authSubmit').addEventListener('click', submitAuth);
     document.getElementById('authSwitch').addEventListener('click', function () {
       setAuthMode(authMode === 'register' ? 'login' : 'register');
@@ -169,7 +173,7 @@
     button.disabled = true;
     errorNode.textContent = '';
     try {
-      apiBase = normalizeServer(document.getElementById('serverAddress').value);
+      apiBase = normalizeServer(document.getElementById('serverAddress').value.trim() || apiBase);
       const health = await fetch(apiBase + '/api/health');
       if (!health.ok) throw new Error('暂时连不上服务器，请检查地址和网络。');
       localStorage.setItem(SERVER_KEY, apiBase);
@@ -637,12 +641,22 @@
   function openComposer(kind) {
     if (!me) return showAuth();
     document.getElementById('modal').classList.add('open');
+    document.body.classList.add('composer-open');
+    setMusicPanel(kind === 'music');
     if (kind === 'photo') document.getElementById('photoInput').click();
     if (kind === 'video') document.getElementById('videoInput').click();
-    if (!document.getElementById('musicResults').childElementCount) searchOnlineMusic(true);
+  }
+  function setMusicPanel(open) {
+    const panel = document.getElementById('musicPanel');
+    const button = document.getElementById('musicToggleButton');
+    panel.hidden = !open;
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    button.textContent = selectedOnlineTrack ? '已选歌曲' : (open ? '收起' : '选择');
+    if (open && !document.getElementById('musicResults').childElementCount) searchOnlineMusic(true);
   }
   function closeComposer() {
     document.getElementById('modal').classList.remove('open');
+    document.body.classList.remove('composer-open');
     if (activeMusicPreview) activeMusicPreview.pause();
     activeMusicPreview = null;
     if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
@@ -903,6 +917,9 @@
     document.getElementById('videoInput').addEventListener('change', function (event) { loadMedia(event.target); });
     document.getElementById('audioInput').addEventListener('change', function (event) { loadAudio(event.target); });
     document.getElementById('musicSearchButton').addEventListener('click', function () { searchOnlineMusic(true); });
+    document.getElementById('musicToggleButton').addEventListener('click', function () {
+      setMusicPanel(document.getElementById('musicPanel').hidden);
+    });
     document.getElementById('musicRecommendButton').addEventListener('click', function () {
       document.getElementById('musicSearch').value = '';
       searchOnlineMusic(true);
