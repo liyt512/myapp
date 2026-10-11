@@ -14,6 +14,7 @@ const dataDir = process.env.DATA_DIR || path.resolve(__dirname, '../data');
 const mediaDir = path.join(dataDir, 'uploads');
 const port = Number(process.env.PORT || 8080);
 const jwtSecret = process.env.JWT_SECRET || '';
+const jamendoClientId = process.env.JAMENDO_CLIENT_ID || '';
 const maxMediaBytes = 50 * 1024 * 1024;
 const maxAudioBytes = 20 * 1024 * 1024;
 
@@ -69,6 +70,51 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS friend_requests_to_idx ON friend_requests(to_user, status);
   CREATE INDEX IF NOT EXISTS comments_post_idx ON comments(post_id, created_at);
 `);
+const postColumns = new Set(db.prepare('PRAGMA table_info(posts)').all().map((column) => column.name));
+if (!postColumns.has('music_track_id')) db.exec('ALTER TABLE posts ADD COLUMN music_track_id INTEGER');
+if (!postColumns.has('music_artist')) db.exec('ALTER TABLE posts ADD COLUMN music_artist TEXT');
+
+async function getJamendoTracks({ search = '', offset = 0, trackId = null } = {}) {
+  if (!jamendoClientId) throw Object.assign(new Error('在线曲库还没有启用：服务器需要配置 Jamendo 客户端编号。'), { status: 503 });
+  const url = new URL('https://api.jamendo.com/v3.0/tracks/');
+  url.searchParams.set('client_id', jamendoClientId);
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('limit', trackId ? '1' : '20');
+  url.searchParams.set('offset', String(offset));
+  url.searchParams.set('audioformat', 'mp32');
+  url.searchParams.set('include', 'licenses');
+  url.searchParams.set('type', 'single albumtrack');
+  if (trackId) url.searchParams.set('id', String(trackId));
+  else if (search) url.searchParams.set('search', search);
+  else {
+    url.searchParams.set('fuzzytags', 'relaxation');
+    url.searchParams.set('boost', 'popularity_month');
+  }
+  const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw Object.assign(new Error('在线曲库暂时无法连接，请稍后再试。'), { status: 502 });
+  const result = await response.json();
+  if (result.headers?.status !== 'success' || !Array.isArray(result.results)) {
+    throw Object.assign(new Error('在线曲库暂时无法提供歌曲，请稍后再试。'), { status: 502 });
+  }
+  return result.results;
+}
+
+function normalizeJamendoTrack(track) {
+  const id = Number(track.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  let pageUrl = 'https://www.jamendo.com/track/' + id;
+  try {
+    const candidate = new URL(track.shareurl);
+    if (candidate.protocol === 'https:' && /(^|\.)jamendo\.com$/i.test(candidate.hostname)) pageUrl = candidate.toString();
+  } catch {}
+  return {
+    id,
+    title: String(track.name || '未命名歌曲').slice(0, 150),
+    artist: String(track.artist_name || '未知创作者').slice(0, 160),
+    pageUrl,
+    licenseUrl: typeof track.license_ccurl === 'string' && track.license_ccurl.startsWith('https://') ? track.license_ccurl : '',
+  };
+}
 
 const app = express();
 app.disable('x-powered-by');
@@ -161,6 +207,35 @@ function fail(res, status, error) {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'liubai-api' }));
+
+app.get('/api/music/search', requireAuth, async (req, res) => {
+  const search = String(req.query.q || '').trim().slice(0, 80);
+  const requestedOffset = Number(req.query.offset || 0);
+  if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 2000) return fail(res, 400, '歌曲页码无效。');
+  try {
+    const tracks = await getJamendoTracks({ search, offset: requestedOffset });
+    const normalized = tracks.map(normalizeJamendoTrack).filter(Boolean);
+    res.json({ tracks: normalized, hasMore: normalized.length === 20, offset: requestedOffset });
+  } catch (error) {
+    fail(res, error.status || 502, error.message || '在线曲库暂时无法连接，请稍后再试。');
+  }
+});
+
+app.get('/api/music/tracks/:id/audio', async (req, res) => {
+  const trackId = Number(req.params.id);
+  if (!Number.isSafeInteger(trackId) || trackId <= 0) return fail(res, 400, '歌曲编号无效。');
+  try {
+    const tracks = await getJamendoTracks({ trackId });
+    const track = tracks[0];
+    if (!track || typeof track.audio !== 'string') return fail(res, 404, '这首歌曲暂时不能播放。');
+    const audioUrl = new URL(track.audio);
+    if (audioUrl.protocol !== 'https:') return fail(res, 502, '歌曲播放地址无效。');
+    res.set('Cache-Control', 'no-store');
+    res.redirect(302, audioUrl.toString());
+  } catch (error) {
+    fail(res, error.status || 502, error.message || '歌曲播放失败，请稍后再试。');
+  }
+});
 
 app.post('/api/register', limitAuthAttempts, async (req, res, next) => {
   try {
@@ -303,18 +378,24 @@ const saveUpload = (file) => {
 app.post('/api/posts', requireAuth, upload.fields([{ name: 'media', maxCount: 1 }, { name: 'audio', maxCount: 1 }]), (req, res, next) => {
   const text = String(req.body?.text || '').trim();
   const music = String(req.body?.music || '').trim();
+  const musicArtist = String(req.body?.musicArtist || '').trim();
+  const musicTrackIdText = String(req.body?.musicTrackId || '').trim();
+  const musicTrackId = musicTrackIdText ? Number(musicTrackIdText) : null;
   const media = req.files?.media?.[0] || null;
   const audio = req.files?.audio?.[0] || null;
   if (text.length > 2000) return fail(res, 400, '文字最多 2000 个字符。');
   if (music.length > 160) return fail(res, 400, '配乐名称太长。');
-  if (!text && !media && !audio) return fail(res, 400, '请添加文字、照片、视频或配乐。');
+  if (musicArtist.length > 160) return fail(res, 400, '创作者名称太长。');
+  if (musicTrackId !== null && (!Number.isSafeInteger(musicTrackId) || musicTrackId <= 0)) return fail(res, 400, '所选歌曲无效，请重新选择。');
+  if (audio && musicTrackId) return fail(res, 400, '请只选择一种配乐来源。');
+  if (!text && !media && !audio && !musicTrackId) return fail(res, 400, '请添加文字、照片、视频或配乐。');
   let mediaName = null;
   let audioName = null;
   try {
     mediaName = saveUpload(media);
     audioName = saveUpload(audio);
-    const result = db.prepare('INSERT INTO posts (user_id, text, music, media_name, media_type, audio_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(req.user.id, text, music, mediaName, media?.mimetype || null, audioName, now());
+    const result = db.prepare('INSERT INTO posts (user_id, text, music, media_name, media_type, audio_name, music_track_id, music_artist, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(req.user.id, text, music, mediaName, media?.mimetype || null, audioName, musicTrackId, musicArtist || null, now());
     res.status(201).json({ id: result.lastInsertRowid });
   } catch (error) {
     for (const filename of [mediaName, audioName]) if (filename) fs.rmSync(path.join(mediaDir, filename), { force: true });
@@ -345,7 +426,7 @@ function makeMediaUrl(filename, userId) {
 app.get('/api/posts', requireAuth, (req, res) => {
   const userId = req.user.id;
   const posts = db.prepare(`
-    SELECT p.id, p.user_id, p.text, p.music, p.media_name, p.media_type, p.audio_name, p.created_at,
+    SELECT p.id, p.user_id, p.text, p.music, p.music_track_id, p.music_artist, p.media_name, p.media_type, p.audio_name, p.created_at,
       u.username, u.display_name,
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
@@ -363,6 +444,9 @@ app.get('/api/posts', requireAuth, (req, res) => {
     displayName: post.display_name,
     text: post.text,
     music: post.music,
+    musicTrackId: post.music_track_id,
+    musicArtist: post.music_artist,
+    musicPageUrl: post.music_track_id ? 'https://www.jamendo.com/track/' + post.music_track_id : null,
     mediaType: post.media_type,
     mediaUrl: makeMediaUrl(post.media_name, userId),
     audioUrl: makeMediaUrl(post.audio_name, userId),

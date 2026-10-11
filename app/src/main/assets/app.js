@@ -11,6 +11,8 @@
   let friendTab = 'recommend';
   let pendingDeleteId = null;
   let selectedAudioUrl = '';
+  let selectedOnlineTrack = null;
+  let musicSearchOffset = 0;
   let authMode = 'register';
   let hubLoadId = 0;
 
@@ -21,6 +23,29 @@
     toastNode.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { toastNode.classList.remove('show'); }, 2300);
+  }
+
+  function iconSvg(name) {
+    const paths = {
+      heart: '<path d="M20.8 8.7c0 5.2-8.8 10.5-8.8 10.5S3.2 13.9 3.2 8.7A4.7 4.7 0 0 1 12 6.1a4.7 4.7 0 0 1 8.8 2.6Z"/>',
+      comment: '<path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.5A7.5 7.5 0 1 1 20 11.5Z"/>',
+      share: '<path d="M12 15V3m0 0L7 8m5-5 5 5"/><path d="M5 13v7h14v-7"/>',
+      user: '<circle cx="12" cy="8" r="3.5"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+      music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+      trash: '<path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3"/>',
+    };
+    return '<svg viewBox="0 0 24 24" aria-hidden="true">' + (paths[name] || '') + '</svg>';
+  }
+
+  function makeIconAction(iconName, label, className) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className || 'reaction icon-label';
+    button.insertAdjacentHTML('afterbegin', iconSvg(iconName));
+    const text = document.createElement('span');
+    text.textContent = label;
+    button.appendChild(text);
+    return button;
   }
 
   function normalizeServer(value) {
@@ -91,6 +116,7 @@
       '.feed-empty b{display:block;font-size:22px;color:#171717;margin-bottom:8px}',
       '.post-media{max-height:480px}',
       '.top-right .account-button{border:1px solid #171717;border-radius:50%;width:35px;height:35px;background:#171717;color:white;font-size:10px;font-weight:700;letter-spacing:-1px}',
+      '.top-right .account-button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8}',
       '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:17px 15px}.post-foot{gap:14px}}'
     ].join('\n');
     document.head.appendChild(style);
@@ -223,7 +249,7 @@
     if (counts.length > 0) counts[0].textContent = me && me.postCount !== undefined ? me.postCount : '0';
     if (counts.length > 2) counts[2].textContent = me && me.likeCount !== undefined ? me.likeCount : '0';
     const accountButton = document.getElementById('accountButton');
-    if (accountButton) accountButton.textContent = me ? '>_<' : 'o_o';
+    if (accountButton) accountButton.innerHTML = iconSvg('user');
   }
 
   function formatTime(value) {
@@ -280,8 +306,8 @@
     who.append(author, time);
     header.appendChild(who);
     if (post.owned) {
-      const more = makeAction('···', 'more');
-      more.setAttribute('aria-label', '删除选项');
+      const more = makeIconAction('trash', '删除', 'more icon-label');
+      more.setAttribute('aria-label', '删除这条日常');
       more.addEventListener('click', function () { openDeleteDialog(article); });
       header.appendChild(more);
     }
@@ -295,8 +321,11 @@
     }
     if (post.music) {
       const music = document.createElement('div');
-      music.className = 'music-chip';
-      music.textContent = '♪_♪ ' + post.music;
+      music.className = 'music-chip icon-label';
+      music.insertAdjacentHTML('afterbegin', iconSvg('music'));
+      const musicTitle = document.createElement('span');
+      musicTitle.textContent = post.music;
+      music.appendChild(musicTitle);
       article.appendChild(music);
     }
     if (post.mediaUrl) {
@@ -322,21 +351,41 @@
       audio.src = mediaUrl(post.audioUrl);
       article.appendChild(audio);
     }
+    if (post.musicTrackId) {
+      const audio = document.createElement('audio');
+      audio.className = 'post-audio';
+      audio.controls = true;
+      audio.preload = 'none';
+      audio.src = apiBase + '/api/music/tracks/' + encodeURIComponent(post.musicTrackId) + '/audio';
+      audio.setAttribute('aria-label', '播放配乐：' + (post.music || '在线音乐'));
+      article.appendChild(audio);
+      const credit = document.createElement('small');
+      credit.className = 'post-music-credit';
+      const creator = document.createElement('span');
+      creator.textContent = '创作者：' + (post.musicArtist || 'Jamendo 音乐人') + ' · 音乐来源：';
+      const source = document.createElement('a');
+      source.href = post.musicPageUrl || ('https://www.jamendo.com/track/' + encodeURIComponent(post.musicTrackId));
+      source.target = '_blank';
+      source.rel = 'noopener noreferrer';
+      source.textContent = 'Jamendo 曲目页';
+      credit.append(creator, source);
+      article.appendChild(credit);
+    }
 
     const footer = document.createElement('div');
     footer.className = 'post-foot';
-    const like = makeAction((post.liked ? '♥ ' : '♡ ') + post.likeCount, 'reaction like' + (post.liked ? ' liked' : ''));
+    const like = makeIconAction('heart', String(post.likeCount), 'reaction like icon-label' + (post.liked ? ' liked' : ''));
     like.addEventListener('click', async function () {
       try {
         const result = await request('/api/posts/' + post.id + '/like', { method: post.liked ? 'DELETE' : 'POST' });
         post.liked = result.liked;
         post.likeCount += post.liked ? 1 : -1;
-        like.textContent = (post.liked ? '♥ ' : '♡ ') + post.likeCount;
+        like.querySelector('span').textContent = String(post.likeCount);
         like.classList.toggle('liked', post.liked);
       } catch (error) { toast(error.message); }
     });
-    const commentButton = makeAction('评论', 'reaction comment-toggle');
-    const shareButton = makeAction('分享', 'reaction share');
+    const commentButton = makeIconAction('comment', '评论', 'reaction comment-toggle icon-label');
+    const shareButton = makeIconAction('share', '分享', 'reaction share icon-label');
     shareButton.addEventListener('click', function () { toast('让朋友搜索 @' + post.username + '，即可添加好友'); });
     footer.append(like, commentButton, shareButton);
     article.appendChild(footer);
@@ -590,9 +639,152 @@
     document.getElementById('modal').classList.add('open');
     if (kind === 'photo') document.getElementById('photoInput').click();
     if (kind === 'video') document.getElementById('videoInput').click();
-    if (kind === 'music') document.getElementById('audioInput').click();
+    if (!document.getElementById('musicResults').childElementCount) searchOnlineMusic(true);
   }
-  function closeComposer() { document.getElementById('modal').classList.remove('open'); }
+  function closeComposer() {
+    document.getElementById('modal').classList.remove('open');
+    if (activeMusicPreview) activeMusicPreview.pause();
+    activeMusicPreview = null;
+    if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
+    activeMusicPreviewButton = null;
+    const selectedPlayer = document.querySelector('#audioPreview audio');
+    if (selectedPlayer) selectedPlayer.pause();
+  }
+
+  function musicAudioUrl(trackId) {
+    return apiBase + '/api/music/tracks/' + encodeURIComponent(trackId) + '/audio';
+  }
+
+  function showSelectedTrack(track) {
+    const preview = document.getElementById('audioPreview');
+    preview.hidden = false;
+    preview.replaceChildren();
+    const name = document.createElement('span');
+    name.textContent = '已选网络配乐：' + track.title + ' · ' + track.artist;
+    const player = document.createElement('audio');
+    player.controls = true;
+    player.preload = 'none';
+    player.src = musicAudioUrl(track.id);
+    const credit = document.createElement('small');
+    credit.className = 'music-credit';
+    credit.append(document.createTextNode('创作者：' + track.artist + ' · 音乐来源：'));
+    const source = document.createElement('a');
+    source.href = track.pageUrl;
+    source.target = '_blank';
+    source.rel = 'noopener noreferrer';
+    source.textContent = 'Jamendo 曲目页';
+    credit.appendChild(source);
+    preview.append(name, player, credit);
+  }
+
+  function useOnlineTrack(track) {
+    if (activeMusicPreview) activeMusicPreview.pause();
+    activeMusicPreview = null;
+    if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
+    activeMusicPreviewButton = null;
+    selectedOnlineTrack = track;
+    const audioInput = document.getElementById('audioInput');
+    audioInput.value = '';
+    if (selectedAudioUrl) URL.revokeObjectURL(selectedAudioUrl);
+    selectedAudioUrl = '';
+    showSelectedTrack(track);
+    toast('已选配乐：' + track.title);
+  }
+
+  let activeMusicPreview = null;
+  let activeMusicPreviewButton = null;
+  function previewOnlineTrack(track, button) {
+    if (activeMusicPreview && activeMusicPreview.dataset.trackId === String(track.id)) {
+      activeMusicPreview.pause();
+      activeMusicPreview = null;
+      if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
+      activeMusicPreviewButton = null;
+      return;
+    }
+    if (activeMusicPreview) activeMusicPreview.pause();
+    if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
+    const player = new Audio(musicAudioUrl(track.id));
+    player.preload = 'none';
+    player.dataset.trackId = String(track.id);
+    activeMusicPreview = player;
+    activeMusicPreviewButton = button;
+    button.textContent = '暂停';
+    player.addEventListener('ended', function () {
+      if (activeMusicPreview === player) {
+        activeMusicPreview = null;
+        if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
+        activeMusicPreviewButton = null;
+      }
+    }, { once: true });
+    player.play().catch(function () {
+      if (activeMusicPreview === player) {
+        activeMusicPreview = null;
+        activeMusicPreviewButton = null;
+        button.textContent = '重试';
+      }
+      toast('这首歌曲暂时无法播放，请换一首试试');
+    });
+  }
+
+  async function searchOnlineMusic(reset) {
+    const results = document.getElementById('musicResults');
+    const more = document.getElementById('musicMoreButton');
+    const button = document.getElementById('musicSearchButton');
+    if (reset) {
+      musicSearchOffset = 0;
+      results.replaceChildren();
+      results.textContent = '正在查找音乐…';
+    }
+    button.disabled = true;
+    try {
+      const query = document.getElementById('musicSearch').value.trim();
+      const params = new URLSearchParams({ q: query, offset: String(musicSearchOffset) });
+      const result = await request('/api/music/search?' + params.toString());
+      if (reset) results.replaceChildren();
+      if (!result.tracks.length && !results.childElementCount) {
+        const empty = document.createElement('div');
+        empty.className = 'music-track-artist';
+        empty.style.padding = '14px';
+        empty.textContent = '没有找到歌曲，试试歌手名或英文风格词。';
+        results.appendChild(empty);
+      }
+      result.tracks.forEach(function (track) {
+        const row = document.createElement('div');
+        row.className = 'music-track';
+        const copy = document.createElement('div');
+        copy.className = 'music-track-copy';
+        const title = document.createElement('div');
+        title.className = 'music-track-title';
+        title.textContent = track.title;
+        const artist = document.createElement('div');
+        artist.className = 'music-track-artist';
+        artist.textContent = track.artist + ' · Jamendo';
+        copy.append(title, artist);
+        const play = document.createElement('button');
+        play.type = 'button';
+        play.className = 'icon-label';
+        play.textContent = '试听';
+        play.addEventListener('click', function () { previewOnlineTrack(track, play); });
+        const choose = document.createElement('button');
+        choose.type = 'button';
+        choose.className = 'choose';
+        choose.textContent = '选用';
+        choose.addEventListener('click', function () { useOnlineTrack(track); });
+        row.append(copy, play, choose);
+        results.appendChild(row);
+      });
+      musicSearchOffset += result.tracks.length;
+      more.hidden = !result.hasMore;
+    } catch (error) {
+      results.replaceChildren();
+      const message = document.createElement('div');
+      message.className = 'music-track-artist';
+      message.style.padding = '14px';
+      message.textContent = error.message;
+      results.appendChild(message);
+      more.hidden = true;
+    } finally { button.disabled = false; }
+  }
 
   function loadMedia(input) {
     const file = input.files && input.files[0];
@@ -615,6 +807,7 @@
     const file = input.files && input.files[0];
     if (!file) return;
     if (file.size > 20 * 1024 * 1024) { toast('配乐文件不能超过 20 MB'); input.value = ''; return; }
+    selectedOnlineTrack = null;
     if (selectedAudioUrl) URL.revokeObjectURL(selectedAudioUrl);
     selectedAudioUrl = URL.createObjectURL(file);
     const preview = document.getElementById('audioPreview');
@@ -632,13 +825,14 @@
   async function publishPost() {
     if (!me) return showAuth();
     const caption = document.getElementById('caption');
-    const music = document.getElementById('music');
     const mediaInput = document.getElementById('photoInput').files?.[0] || document.getElementById('videoInput').files?.[0];
     const audioFile = document.getElementById('audioInput').files?.[0];
-    if (!caption.value.trim() && !mediaInput && !audioFile && !music.value) { toast('写点文字或添加照片、视频、配乐吧'); return; }
+    if (!caption.value.trim() && !mediaInput && !audioFile && !selectedOnlineTrack) { toast('写点文字或添加照片、视频、配乐吧'); return; }
     const form = new FormData();
     form.append('text', caption.value.trim());
-    form.append('music', music.value || '');
+    form.append('music', selectedOnlineTrack ? selectedOnlineTrack.title : '');
+    form.append('musicArtist', selectedOnlineTrack ? selectedOnlineTrack.artist : '');
+    form.append('musicTrackId', selectedOnlineTrack ? String(selectedOnlineTrack.id) : '');
     if (mediaInput) form.append('media', mediaInput, mediaInput.name);
     if (audioFile) form.append('audio', audioFile, audioFile.name);
     const button = document.querySelector('#modal .publish');
@@ -654,9 +848,13 @@
       document.getElementById('audioInput').value = '';
       document.getElementById('audioPreview').replaceChildren();
       document.getElementById('audioPreview').hidden = true;
-      music.selectedIndex = 0;
       if (selectedAudioUrl) URL.revokeObjectURL(selectedAudioUrl);
       selectedAudioUrl = '';
+      selectedOnlineTrack = null;
+      document.getElementById('musicSearch').value = '';
+      document.getElementById('musicResults').replaceChildren();
+      document.getElementById('musicMoreButton').hidden = true;
+      musicSearchOffset = 0;
       closeComposer();
       await loadApp();
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -704,6 +902,15 @@
     document.getElementById('photoInput').addEventListener('change', function (event) { loadMedia(event.target); });
     document.getElementById('videoInput').addEventListener('change', function (event) { loadMedia(event.target); });
     document.getElementById('audioInput').addEventListener('change', function (event) { loadAudio(event.target); });
+    document.getElementById('musicSearchButton').addEventListener('click', function () { searchOnlineMusic(true); });
+    document.getElementById('musicRecommendButton').addEventListener('click', function () {
+      document.getElementById('musicSearch').value = '';
+      searchOnlineMusic(true);
+    });
+    document.getElementById('musicMoreButton').addEventListener('click', function () { searchOnlineMusic(false); });
+    document.getElementById('musicSearch').addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); searchOnlineMusic(true); }
+    });
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') { closeComposer(); closeFriendHub(); closeDeleteDialog(); }
     });

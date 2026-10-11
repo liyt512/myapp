@@ -4,6 +4,12 @@ API service for the Android app. It uses SQLite for accounts, friend requests,
 posts, likes, and comments. Uploaded media stays in a persistent data directory
 outside the repository.
 
+Online music search and playback use Jamendo's read API. Create an app in the
+Jamendo Developer Portal and set its client ID as `JAMENDO_CLIENT_ID` in the
+private server environment file. Do not commit that value to Git. The catalog is
+for non-commercial use under the API terms; the app displays artist credits and
+a direct link to each Jamendo track page.
+
 ## Local development
 
 Use a supported Node.js release, then run `npm install` and `npm start` from this
@@ -18,6 +24,8 @@ remote clients.
 - `POST /api/friend-requests`, `POST /api/friend-requests/:id/accept`
 - `DELETE /api/friend-requests/:id`, `DELETE /api/friends/:userId`
 - `GET /api/posts`, `POST /api/posts`, `DELETE /api/posts/:id`
+- `GET /api/music/search?q=...&offset=...` (authenticated search)
+- `GET /api/music/tracks/:id/audio` (resolves the current stream URL)
 - `POST|DELETE /api/posts/:id/like`
 - `GET|POST /api/posts/:id/comments`
 - `GET /api/media/:filename` (short-lived, signed URL)
