@@ -1,0 +1,27 @@
+# 留白 API
+
+API service for the Android app. It uses SQLite for accounts, friend requests,
+posts, likes, and comments. Uploaded media stays in a persistent data directory
+outside the repository.
+
+## Local development
+
+Use a supported Node.js release, then run `npm install` and `npm start` from this
+directory. Set `JWT_SECRET` to a random value of at least 32 bytes. The API binds
+to `127.0.0.1:8080` by default; place a TLS reverse proxy in front of it for
+remote clients.
+
+## Routes
+
+- `POST /api/register`, `POST /api/login`, `GET /api/me`
+- `GET /api/users?q=...`, `GET /api/friends`
+- `POST /api/friend-requests`, `POST /api/friend-requests/:id/accept`
+- `DELETE /api/friend-requests/:id`, `DELETE /api/friends/:userId`
+- `GET /api/posts`, `POST /api/posts`, `DELETE /api/posts/:id`
+- `POST|DELETE /api/posts/:id/like`
+- `GET|POST /api/posts/:id/comments`
+- `GET /api/media/:filename` (short-lived, signed URL)
+
+Media uploads are limited to 50 MB per file (20 MB for audio). Supported types
+are common JPEG/PNG/WebP/GIF images, MP4/WebM/MOV videos, and MP3/M4A/AAC/WAV/OGG
+audio files.

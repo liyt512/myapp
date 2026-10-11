@@ -1,0 +1,26 @@
+[Unit]
+Description=Liubai social app API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=liubai
+Group=liubai
+WorkingDirectory=/opt/liubai/server
+EnvironmentFile=/etc/liubai/liubai.env
+Environment=PORT=8080
+Environment=DATA_DIR=/var/lib/liubai
+ExecStart=/opt/node/bin/node /opt/liubai/server/app.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/liubai
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

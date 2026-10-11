@@ -56,7 +56,11 @@ public class MainActivity extends Activity {
             }
         });
         setContentView(webView);
-        webView.loadUrl("file:///android_asset/index.html");
+        String appUrl = "file:///android_asset/index.html";
+        if (!BuildConfig.LIUBAI_API_URL.isEmpty()) {
+            appUrl += "?server=" + Uri.encode(BuildConfig.LIUBAI_API_URL);
+        }
+        webView.loadUrl(appUrl);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {

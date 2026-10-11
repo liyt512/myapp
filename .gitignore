@@ -4,3 +4,6 @@ app/build/
 local.properties
 *.iml
 .idea/
+server/node_modules/
+server/data/
+server/.env
