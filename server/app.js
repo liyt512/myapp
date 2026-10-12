@@ -85,10 +85,14 @@ async function getJamendoTracks({ search = '', offset = 0, trackId = null } = {}
   url.searchParams.set('include', 'licenses');
   url.searchParams.set('type', 'single albumtrack');
   if (trackId) url.searchParams.set('id', String(trackId));
-  else if (search) url.searchParams.set('search', search);
   else {
-    url.searchParams.set('fuzzytags', 'relaxation');
-    url.searchParams.set('boost', 'popularity_month');
+    // Keep search results focused on Chinese-language tracks in Jamendo's catalog.
+    url.searchParams.set('lang', 'zh');
+    if (search) url.searchParams.set('search', search);
+    else {
+      url.searchParams.set('fuzzytags', 'pop');
+      url.searchParams.set('boost', 'popularity_month');
+    }
   }
   const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw Object.assign(new Error('在线曲库暂时无法连接，请稍后再试。'), { status: 502 });
@@ -539,3 +543,4 @@ const server = app.listen(port, '127.0.0.1', () => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => server.close(() => { db.close(); process.exit(0); }));
 }
+

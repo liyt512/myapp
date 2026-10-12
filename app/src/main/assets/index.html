@@ -90,7 +90,7 @@
     <button aria-label="好友" onclick="openFriendHub('recommend')"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5a3.5 3.5 0 0 1 0 6.8M17 14a5 5 0 0 1 4.5 5"/></svg><span>好友</span></button>
     <button aria-label="发布日常" onclick="openComposer()"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M7 12h10"/></svg><span>发布</span></button>
     <button aria-label="消息" onclick="toast('消息功能正在准备中')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-3 2v-5.5A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/></svg><span>消息</span></button>
-    <button aria-label="我的" onclick="toast('个人主页')"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>我的</span></button>
+    <button aria-label="我的" onclick="openMyProfile()"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>我的</span></button>
   </nav>
 </div>
 <div class="modal-backdrop" id="modal" onclick="if(event.target===this)closeComposer()"><section class="modal"><div class="modal-head"><h2>分享一个日常</h2><button class="close" aria-label="关闭" onclick="closeComposer()">×</button></div><div class="modal-content"><textarea id="caption" placeholder="这一刻，你在想什么？"></textarea><div class="upload-preview" id="preview"></div>
@@ -113,3 +113,4 @@
 <script src="./app.js"></script>
 </body>
 </html>
+

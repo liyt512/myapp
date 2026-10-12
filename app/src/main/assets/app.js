@@ -117,10 +117,30 @@
       '.comment-author{font-weight:600;color:#171717;margin-right:5px}',
       '.feed-empty{background:#fff;border:1px solid var(--line);border-radius:20px;text-align:center;color:#777;padding:42px 20px;font-size:13px;line-height:1.9}',
       '.feed-empty b{display:block;font-size:22px;color:#171717;margin-bottom:8px}',
+      '.profile-backdrop{position:fixed;inset:0;background:#0008;z-index:40;display:none;align-items:center;justify-content:center;padding:18px}',
+      '.profile-backdrop.open{display:flex}',
+      '.profile-page{width:min(760px,100%);height:min(88vh,900px);background:#f6f6f4;border:1px solid #171717;border-radius:24px;overflow:auto;padding:18px 20px 26px;box-shadow:0 24px 90px #0004}',
+      '.profile-page-head{position:sticky;top:-18px;z-index:2;display:flex;align-items:center;gap:12px;background:#f6f6f4ed;backdrop-filter:blur(12px);margin:-18px -20px 16px;padding:14px 20px;border-bottom:1px solid var(--line)}',
+      '.profile-page-head h2{flex:1;margin:0;font-size:17px}',
+      '.profile-page-head button,.profile-publish{border:1px solid var(--line);background:#fff;border-radius:18px;padding:8px 12px;font-size:11px}',
+      '.profile-summary-card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:20px;margin-bottom:20px}',
+      '.profile-summary-top{display:flex;align-items:center;gap:14px}',
+      '.profile-avatar{width:58px;height:58px;font-size:17px;border-radius:50%}',
+      '.profile-display-name{font-weight:700;font-size:18px}',
+      '.profile-handle,.profile-joined{font-size:11px;color:#777;margin-top:4px}',
+      '.profile-stats{display:grid;grid-template-columns:repeat(3,1fr);margin-top:18px;border-top:1px solid var(--line);padding-top:15px;text-align:center}',
+      '.profile-stat b{display:block;font-size:16px}.profile-stat span{display:block;font-size:10px;color:#777;margin-top:4px}',
+      '.profile-actions{display:flex;justify-content:flex-end;margin-top:14px}',
+      '.profile-publish{background:#171717;color:#fff;border-color:#171717}',
+      '.profile-post-title{font-size:15px;margin:0 0 12px}',
+      '.profile-posts .post{margin-bottom:13px}',
+      '#deleteModal{z-index:70}',
+      '.me-card{cursor:pointer}',
       '.post-media{max-height:480px}',
       '.top-right .account-button{border:1px solid #171717;border-radius:50%;width:35px;height:35px;background:#171717;color:white;font-size:10px;font-weight:700;letter-spacing:-1px}',
       '.top-right .account-button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8}',
-      '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:17px 15px}.post-foot{gap:14px}}'
+      '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:17px 15px}.post-foot{gap:14px}}',
+      '@media(max-width:600px){.profile-backdrop{padding:0}.profile-page{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:18px 14px calc(18px + env(safe-area-inset-bottom))}.profile-page-head{top:-18px;margin-left:-14px;margin-right:-14px;padding-left:14px;padding-right:14px}.profile-summary-card{padding:17px}.profile-avatar{width:52px;height:52px}}'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -210,7 +230,7 @@
     button.textContent = '>_<';
     button.setAttribute('aria-label', '我的账号');
     host.appendChild(button);
-    button.addEventListener('click', openAccount);
+    button.addEventListener('click', openMyProfile);
 
     const layer = document.createElement('div');
     layer.className = 'account-backdrop';
@@ -222,6 +242,111 @@
     document.body.appendChild(layer);
     document.getElementById('accountClose').addEventListener('click', function () { layer.classList.remove('open'); });
     document.getElementById('logoutButton').addEventListener('click', logout);
+  }
+
+  function installProfilePage() {
+    const layer = document.createElement('div');
+    layer.className = 'profile-backdrop';
+    layer.id = 'profilePage';
+    layer.innerHTML = '<section class="profile-page" role="dialog" aria-modal="true" aria-labelledby="profileTitle">' +
+      '<header class="profile-page-head"><button type="button" id="profileBack">返回</button><h2 id="profileTitle">个人主页</h2><button type="button" id="profileAccount">账号设置</button></header>' +
+      '<div id="myProfileSummary"></div><h3 class="profile-post-title">我的日常</h3><div class="profile-posts" id="myProfilePosts"></div></section>';
+    layer.addEventListener('click', function (event) { if (event.target === layer) closeMyProfile(); });
+    document.body.appendChild(layer);
+    document.getElementById('profileBack').addEventListener('click', closeMyProfile);
+    document.getElementById('profileAccount').addEventListener('click', openAccount);
+    const card = document.querySelector('.me-card');
+    if (card) {
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.addEventListener('click', openMyProfile);
+      card.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openMyProfile(); }
+      });
+    }
+  }
+
+  let profileLoadId = 0;
+  async function openMyProfile() {
+    if (!me) return showAuth();
+    document.getElementById('profilePage').classList.add('open');
+    document.querySelectorAll('.mobile-nav button').forEach(function (button) { button.classList.toggle('active', button.getAttribute('aria-label') === '我的'); });
+    await loadMyProfile();
+  }
+
+  function closeMyProfile() {
+    const layer = document.getElementById('profilePage');
+    if (layer) layer.classList.remove('open');
+    document.querySelectorAll('.mobile-nav button').forEach(function (button) { button.classList.toggle('active', button.getAttribute('aria-label') === '日常'); });
+  }
+
+  async function loadMyProfile() {
+    if (!me) return;
+    const loadId = ++profileLoadId;
+    const summary = document.getElementById('myProfileSummary');
+    const postsHost = document.getElementById('myProfilePosts');
+    summary.textContent = '正在加载个人主页…';
+    postsHost.replaceChildren();
+    try {
+      const values = await Promise.all([request('/api/me'), request('/api/posts')]);
+      if (loadId !== profileLoadId || !document.getElementById('profilePage').classList.contains('open')) return;
+      me = values[0];
+      const posts = values[1].posts.filter(function (post) { return post.owned; });
+      renderProfile();
+      summary.replaceChildren();
+
+      const card = document.createElement('section');
+      card.className = 'profile-summary-card';
+      const top = document.createElement('div');
+      top.className = 'profile-summary-top';
+      const avatar = avatarMark(me.displayName);
+      avatar.classList.add('profile-avatar');
+      const identity = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'profile-display-name';
+      name.textContent = me.displayName || '留白用户';
+      const handle = document.createElement('div');
+      handle.className = 'profile-handle';
+      handle.textContent = '@' + me.username;
+      const joined = document.createElement('div');
+      joined.className = 'profile-joined';
+      const created = new Date(me.createdAt);
+      joined.textContent = Number.isNaN(created.getTime()) ? '留白好友' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(created) + ' 加入留白';
+      identity.append(name, handle, joined);
+      top.append(avatar, identity);
+      const stats = document.createElement('div');
+      stats.className = 'profile-stats';
+      [[me.postCount || 0, '日常'], [me.friendCount || 0, '好友'], [me.likeCount || 0, '获赞']].forEach(function (item) {
+        const stat = document.createElement('div');
+        stat.className = 'profile-stat';
+        const count = document.createElement('b');
+        count.textContent = String(item[0]);
+        const label = document.createElement('span');
+        label.textContent = item[1];
+        stat.append(count, label);
+        stats.appendChild(stat);
+      });
+      const actions = document.createElement('div');
+      actions.className = 'profile-actions';
+      const publish = document.createElement('button');
+      publish.type = 'button';
+      publish.className = 'profile-publish';
+      publish.textContent = '发布日常';
+      publish.addEventListener('click', function () { closeMyProfile(); openComposer(); });
+      actions.appendChild(publish);
+      card.append(top, stats, actions);
+      summary.appendChild(card);
+
+      if (!posts.length) {
+        const empty = document.createElement('div');
+        empty.className = 'feed-empty';
+        empty.innerHTML = '<b>&gt;_&lt;</b><span>还没有发布日常，分享一个此刻吧。</span>';
+        postsHost.appendChild(empty);
+      } else posts.forEach(function (post) { postsHost.appendChild(makePost(post)); });
+    } catch (error) {
+      if (loadId !== profileLoadId) return;
+      summary.textContent = error.message || '个人主页暂时无法加载。';
+    }
   }
 
   function openAccount() {
@@ -237,6 +362,7 @@
     friendState = { friends: [], incoming: [], outgoing: [] };
     localStorage.removeItem(TOKEN_KEY);
     document.getElementById('accountDialog').classList.remove('open');
+    closeMyProfile();
     renderEmptyFeed('登录后查看好友的日常');
     renderProfile();
     showAuth('已退出账号。');
@@ -891,11 +1017,11 @@
     const id = pendingDeleteId;
     try {
       await request('/api/posts/' + id, { method: 'DELETE' });
-      const post = document.querySelector('[data-post-id="' + CSS.escape(id) + '"]');
-      if (post) post.remove();
+      document.querySelectorAll('[data-post-id="' + CSS.escape(id) + '"]').forEach(function (post) { post.remove(); });
       closeDeleteDialog();
       await loadFeed();
       await loadProfileCounts();
+      if (document.getElementById('profilePage').classList.contains('open')) await loadMyProfile();
       toast('日常已从所有设备删除');
     } catch (error) { toast(error.message); }
   }
@@ -911,6 +1037,7 @@
     replaceSampleAvatars();
     installAuthDialog();
     installAccountButton();
+    installProfilePage();
     const date = document.getElementById('today');
     if (date) date.textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
     document.getElementById('photoInput').addEventListener('change', function (event) { loadMedia(event.target); });
@@ -929,7 +1056,7 @@
       if (event.key === 'Enter') { event.preventDefault(); searchOnlineMusic(true); }
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { closeComposer(); closeFriendHub(); closeDeleteDialog(); }
+      if (event.key === 'Escape') { closeComposer(); closeFriendHub(); closeDeleteDialog(); closeMyProfile(); }
     });
     const sideTitle = document.querySelector('#friends .side-title');
     if (sideTitle && sideTitle.firstChild) sideTitle.firstChild.textContent = '我的好友 ';
@@ -953,6 +1080,8 @@
   window.closeComposer = closeComposer;
   window.openFriendHub = openFriendHub;
   window.closeFriendHub = closeFriendHub;
+  window.openMyProfile = openMyProfile;
+  window.closeMyProfile = closeMyProfile;
   window.setFriendTab = setFriendTab;
   window.renderFriendHub = renderFriendHub;
   window.publishPost = publishPost;
@@ -964,3 +1093,4 @@
 
   start();
 }());
+
