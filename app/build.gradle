@@ -13,8 +13,8 @@ android {
         applicationId 'app.liubai.social'
         minSdk 23
         targetSdk 36
-        versionCode 5
-        versionName '1.4'
+        versionCode 7
+        versionName '1.6'
         buildConfigField 'String', 'LIUBAI_API_URL', '"' + liubaiApiUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
     }
 

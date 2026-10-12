@@ -140,7 +140,7 @@
       '.top-right .account-button{border:1px solid #171717;border-radius:50%;width:35px;height:35px;background:#171717;color:white;font-size:10px;font-weight:700;letter-spacing:-1px}',
       '.top-right .account-button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8}',
       '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:17px 15px}.post-foot{gap:14px}}',
-      '@media(max-width:600px){.profile-backdrop{padding:0}.profile-page{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:18px 14px calc(18px + env(safe-area-inset-bottom))}.profile-page-head{top:-18px;margin-left:-14px;margin-right:-14px;padding-left:14px;padding-right:14px}.profile-summary-card{padding:17px}.profile-avatar{width:52px;height:52px}}'
+      '@media(max-width:600px){.profile-backdrop{padding:0}.profile-page{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:calc(18px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom))}.profile-page-head{top:0;margin-top:calc(-18px - env(safe-area-inset-top));margin-left:-14px;margin-right:-14px;padding:calc(14px + env(safe-area-inset-top)) 14px 14px}.profile-summary-card{padding:17px}.profile-avatar{width:52px;height:52px}}'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -836,33 +836,47 @@
   function previewOnlineTrack(track, button) {
     if (activeMusicPreview && activeMusicPreview.dataset.trackId === String(track.id)) {
       activeMusicPreview.pause();
-      activeMusicPreview = null;
-      if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
-      activeMusicPreviewButton = null;
+      if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '继续试听';
       return;
     }
     if (activeMusicPreview) activeMusicPreview.pause();
     if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
-    const player = new Audio(musicAudioUrl(track.id));
+    const copy = button.closest('.music-track').querySelector('.music-track-copy');
+    let player = copy.querySelector('audio');
+    if (!player) {
+      player = document.createElement('audio');
+      player.controls = true;
+      player.preload = 'none';
+      player.style.cssText = 'display:block;width:100%;height:38px;margin-top:8px';
+      player.src = musicAudioUrl(track.id);
+      player.dataset.trackId = String(track.id);
+      copy.appendChild(player);
+      player.addEventListener('error', function () {
+        if (activeMusicPreview === player) {
+          activeMusicPreview = null;
+          activeMusicPreviewButton = null;
+          button.textContent = '重试';
+        }
+        toast('歌曲暂时无法播放，请稍后重试或换一首');
+      });
+      player.addEventListener('ended', function () {
+        if (activeMusicPreview === player) {
+          activeMusicPreview = null;
+          activeMusicPreviewButton = null;
+          button.textContent = '试听';
+        }
+      });
+    }
     player.preload = 'none';
-    player.dataset.trackId = String(track.id);
     activeMusicPreview = player;
     activeMusicPreviewButton = button;
     button.textContent = '暂停';
-    player.addEventListener('ended', function () {
-      if (activeMusicPreview === player) {
-        activeMusicPreview = null;
-        if (activeMusicPreviewButton) activeMusicPreviewButton.textContent = '试听';
-        activeMusicPreviewButton = null;
-      }
-    }, { once: true });
     player.play().catch(function () {
       if (activeMusicPreview === player) {
-        activeMusicPreview = null;
-        activeMusicPreviewButton = null;
-        button.textContent = '重试';
+        button.textContent = '点播放器试听';
       }
-      toast('这首歌曲暂时无法播放，请换一首试试');
+      // Keep native controls visible so users can start playback manually if
+      // Android blocks script-started audio or the connection needs a retry.
     });
   }
 

@@ -86,10 +86,13 @@ async function getJamendoTracks({ search = '', offset = 0, trackId = null } = {}
   url.searchParams.set('type', 'single albumtrack');
   if (trackId) url.searchParams.set('id', String(trackId));
   else {
-    // Keep search results focused on Chinese-language tracks in Jamendo's catalog.
-    url.searchParams.set('lang', 'zh');
-    if (search) url.searchParams.set('search', search);
-    else {
+    if (search) {
+      // Search titles and artist names directly; requiring Chinese lyrics here
+      // hides many relevant tracks whose lyrics language is not tagged.
+      url.searchParams.set('search', search);
+    } else {
+      // Keep recommendations focused on Chinese-language tracks.
+      url.searchParams.set('lang', 'zh');
       url.searchParams.set('fuzzytags', 'pop');
       url.searchParams.set('boost', 'popularity_month');
     }
