@@ -15,6 +15,11 @@
   let musicSearchOffset = 0;
   let authMode = 'register';
   let hubLoadId = 0;
+  let currentFeed = 'friends';
+  let currentCategory = '';
+  let selectedMediaFiles = [];
+  const CATEGORY_LIST = ['日常', '美食', '旅行', '心情', '学习', '运动', '其他'];
+  const VISIBILITY_LABEL = { public: '公开', friends: '仅好友', private: '仅自己' };
 
   const toastNode = document.getElementById('toast');
   let toastTimer;
@@ -140,7 +145,15 @@
       '.top-right .account-button{border:1px solid #171717;border-radius:50%;width:35px;height:35px;background:#171717;color:white;font-size:10px;font-weight:700;letter-spacing:-1px}',
       '.top-right .account-button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8}',
       '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:17px 15px}.post-foot{gap:14px}}',
-      '@media(max-width:600px){.profile-backdrop{padding:0}.profile-page{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:calc(18px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom))}.profile-page-head{top:0;margin-top:calc(-18px - env(safe-area-inset-top));margin-left:-14px;margin-right:-14px;padding:calc(14px + env(safe-area-inset-top)) 14px 14px}.profile-summary-card{padding:17px}.profile-avatar{width:52px;height:52px}}'
+      '@media(max-width:600px){.profile-backdrop{padding:0}.profile-page{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:calc(18px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom))}.profile-page-head{top:0;margin-top:calc(-18px - env(safe-area-inset-top));margin-left:-14px;margin-right:-14px;padding:calc(14px + env(safe-area-inset-top)) 14px 14px}.profile-summary-card{padding:17px}.profile-avatar{width:52px;height:52px}}',
+      '.feed-tabs{display:flex;gap:8px;margin:0 0 14px}.feed-tabs button{border:1px solid var(--line);background:#fff;border-radius:18px;padding:8px 16px;font-size:12px;color:#777}.feed-tabs button.active{background:#171717;color:#fff;border-color:#171717}',
+      '.category-chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 16px}.category-chips button{border:1px solid var(--line);background:#fff;border-radius:14px;padding:6px 11px;font-size:11px;color:#777}.category-chips button.active{background:#171717;color:#fff;border-color:#171717}',
+      '.post-meta{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 4px}.post-meta span{border-radius:12px;padding:4px 8px;font-size:10px;background:#f1f1ee;color:#555}.post-meta .cat{background:#171717;color:#fff}',
+      '.media-grid{display:grid;gap:6px;margin:12px 0}.media-grid.one{grid-template-columns:1fr}.media-grid.two{grid-template-columns:1fr 1fr}.media-grid.many{grid-template-columns:repeat(3,1fr)}.media-grid .grid-item{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:12px;cursor:pointer;background:#ecece8}.media-grid.one .grid-item{aspect-ratio:auto;max-height:480px}.media-grid video.grid-item{aspect-ratio:auto;max-height:360px}',
+      '.lightbox-backdrop{position:fixed;inset:0;background:#000d;z-index:120;display:none;align-items:center;justify-content:center}.lightbox-backdrop.open{display:flex}.lightbox-inner{max-width:min(92vw,900px);max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:12px}.lightbox-inner img,.lightbox-inner video{max-width:100%;max-height:76vh;border-radius:12px;background:#000}.lightbox-bar{display:flex;gap:10px;align-items:center;color:#fff;font-size:12px}.lightbox-bar button{border:1px solid #fff;background:transparent;color:#fff;border-radius:18px;padding:7px 14px}',
+      '.comment-row.reply{margin-left:24px;border-left:2px solid var(--line);padding-left:10px}.comment-reply-btn{border:0;background:none;color:#777;font-size:11px;margin-left:8px;cursor:pointer}.comment-reply-box{margin:6px 0 6px 24px;display:flex;gap:6px}.comment-reply-box input{flex:1;border:1px solid var(--line);border-radius:16px;padding:8px 11px;font-size:12px;outline:none}.comment-reply-box button{border:0;background:#171717;color:#fff;border-radius:16px;padding:8px 12px;font-size:11px}',
+      '.composer-meta{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.composer-meta label{font-size:11px;color:#555;display:flex;align-items:center;gap:6px}.composer-meta select{border:1px solid var(--line);border-radius:10px;padding:7px 9px;font-size:11px;background:#fff;outline:none}',
+      '.preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.preview-grid img,.preview-grid video{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px}'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -443,6 +456,16 @@
     }
     article.appendChild(header);
 
+    const meta = document.createElement('div');
+    meta.className = 'post-meta';
+    const cat = document.createElement('span');
+    cat.className = 'cat';
+    cat.textContent = post.category || '日常';
+    const vis = document.createElement('span');
+    vis.textContent = VISIBILITY_LABEL[post.visibility] || '仅好友';
+    meta.append(cat, vis);
+    article.appendChild(meta);
+
     if (post.text) {
       const copy = document.createElement('p');
       copy.className = 'post-copy';
@@ -458,20 +481,27 @@
       music.appendChild(musicTitle);
       article.appendChild(music);
     }
-    if (post.mediaUrl) {
-      let media;
-      if (String(post.mediaType || '').startsWith('video/')) {
-        media = document.createElement('video');
-        media.controls = true;
-        media.playsInline = true;
-        media.preload = 'metadata';
-      } else {
-        media = document.createElement('img');
-        media.alt = '日常照片';
-      }
-      media.className = 'post-media';
-      media.src = mediaUrl(post.mediaUrl);
-      article.appendChild(media);
+    const mediaItems = Array.isArray(post.media) && post.media.length ? post.media : (post.mediaUrl ? [{ type: post.mediaType || '', url: post.mediaUrl }] : []);
+    if (mediaItems.length) {
+      const grid = document.createElement('div');
+      grid.className = 'media-grid ' + (mediaItems.length === 1 ? 'one' : mediaItems.length === 2 ? 'two' : 'many');
+      mediaItems.forEach(function (item, index) {
+        let media;
+        if (String(item.type || '').startsWith('video/')) {
+          media = document.createElement('video');
+          media.controls = true;
+          media.playsInline = true;
+          media.preload = 'metadata';
+        } else {
+          media = document.createElement('img');
+          media.alt = '日常照片';
+        }
+        media.className = 'grid-item';
+        media.src = mediaUrl(item.url);
+        media.addEventListener('click', function () { openLightbox(mediaItems, index); });
+        grid.appendChild(media);
+      });
+      article.appendChild(grid);
     }
     if (post.audioUrl) {
       const audio = document.createElement('audio');
@@ -548,7 +578,7 @@
       if (!comments.classList.contains('open') || commentsLoaded) return;
       try {
         const result = await request('/api/posts/' + post.id + '/comments');
-        result.comments.forEach(function (item) { list.appendChild(makeComment(item)); });
+        result.comments.forEach(function (item) { list.appendChild(makeComment(item, post.id, list)); });
         commentsLoaded = true;
       } catch (error) { toast(error.message); }
     });
@@ -558,8 +588,8 @@
       const value = input.value.trim();
       input.disabled = true;
       try {
-        await request('/api/posts/' + post.id + '/comments', { method: 'POST', body: { text: value } });
-        list.appendChild(makeComment({ displayName: me.displayName, username: me.username, text: value }));
+        const created = await request('/api/posts/' + post.id + '/comments', { method: 'POST', body: { text: value } });
+        list.appendChild(makeComment({ id: created.id, displayName: me.displayName, username: me.username, text: value, parentId: null }, post.id, list));
         input.value = '';
         commentsLoaded = true;
       } catch (error) { toast(error.message); }
@@ -568,24 +598,156 @@
     return article;
   }
 
-  function makeComment(comment) {
+  function makeComment(comment, postId, listNode) {
     const row = document.createElement('div');
-    row.className = 'comment-row';
+    const isReply = !!comment.parentId;
+    row.className = 'comment-row' + (isReply ? ' reply' : '');
     const author = document.createElement('span');
     author.className = 'comment-author';
     author.textContent = comment.displayName + '：';
     const text = document.createElement('span');
-    text.textContent = comment.text;
+    text.textContent = (isReply && (comment.parentDisplayName || comment.parentUsername) ? '回复 @' + (comment.parentDisplayName || comment.parentUsername) + '：' : '') + comment.text;
     row.append(author, text);
+    const replyBtn = document.createElement('button');
+    replyBtn.type = 'button';
+    replyBtn.className = 'comment-reply-btn';
+    replyBtn.textContent = '回复';
+    replyBtn.addEventListener('click', function () {
+      if (row.nextSibling && row.nextSibling.classList && row.nextSibling.classList.contains('comment-reply-box')) {
+        row.nextSibling.remove();
+        return;
+      }
+      const box = document.createElement('div');
+      box.className = 'comment-reply-box';
+      const replyInput = document.createElement('input');
+      replyInput.maxLength = 500;
+      replyInput.placeholder = '回复 @' + comment.displayName + '…';
+      const send = document.createElement('button');
+      send.type = 'button';
+      send.textContent = '发送';
+      send.addEventListener('click', async function () {
+        const value = replyInput.value.trim();
+        if (!value) return;
+        send.disabled = true;
+        try {
+          const created = await request('/api/posts/' + postId + '/comments', { method: 'POST', body: { text: value, parentId: comment.id } });
+          const topId = comment.parentId ? comment.parentId : comment.id;
+          const topName = comment.parentId ? (comment.parentDisplayName || comment.parentUsername || comment.displayName) : comment.displayName;
+          const newRow = makeComment({ id: created.id, displayName: me.displayName, username: me.username, text: value, parentId: topId, parentDisplayName: topName }, postId, listNode);
+          listNode.appendChild(newRow);
+          box.remove();
+        } catch (error) { toast(error.message); }
+        finally { send.disabled = false; }
+      });
+      replyInput.addEventListener('keydown', function (event) { if (event.key === 'Enter') { event.preventDefault(); send.click(); } });
+      box.append(replyInput, send);
+      row.after(box);
+      replyInput.focus();
+    });
+    row.appendChild(replyBtn);
     return row;
   }
 
+  let lightboxState = { items: [], index: 0 };
+  function openLightbox(items, index) {
+    let layer = document.getElementById('mediaLightbox');
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.className = 'lightbox-backdrop';
+      layer.id = 'mediaLightbox';
+      layer.innerHTML = '<div class="lightbox-inner"><div class="lightbox-stage"></div><div class="lightbox-bar"><button type="button" data-act="prev">上一个</button><span class="lightbox-count"></span><button type="button" data-act="next">下一个</button><button type="button" data-act="close">关闭</button></div></div>';
+      layer.addEventListener('click', function (event) { if (event.target === layer) closeLightbox(); });
+      document.body.appendChild(layer);
+      layer.querySelector('[data-act="prev"]').addEventListener('click', function () { showLightboxItem(lightboxState.index - 1); });
+      layer.querySelector('[data-act="next"]').addEventListener('click', function () { showLightboxItem(lightboxState.index + 1); });
+      layer.querySelector('[data-act="close"]').addEventListener('click', closeLightbox);
+    }
+    lightboxState = { items: items, index: index };
+    layer.classList.add('open');
+    showLightboxItem(index);
+  }
+  function showLightboxItem(index) {
+    const layer = document.getElementById('mediaLightbox');
+    if (!layer) return;
+    const items = lightboxState.items;
+    if (!items.length) return;
+    const safe = ((index % items.length) + items.length) % items.length;
+    lightboxState.index = safe;
+    const stage = layer.querySelector('.lightbox-stage');
+    stage.replaceChildren();
+    const item = items[safe];
+    let node;
+    if (String(item.type || '').startsWith('video/')) {
+      node = document.createElement('video');
+      node.controls = true;
+      node.autoplay = true;
+      node.playsInline = true;
+    } else {
+      node = document.createElement('img');
+      node.alt = '日常照片';
+    }
+    node.src = mediaUrl(item.url);
+    stage.appendChild(node);
+    layer.querySelector('.lightbox-count').textContent = (safe + 1) + ' / ' + items.length;
+  }
+  function closeLightbox() {
+    const layer = document.getElementById('mediaLightbox');
+    if (layer) layer.classList.remove('open');
+  }
+
   async function loadFeed() {
-    const result = await request('/api/posts');
+    const params = new URLSearchParams({ feed: currentFeed });
+    if (currentCategory) params.set('category', currentCategory);
+    const result = await request('/api/posts?' + params.toString());
     const host = document.getElementById('posts');
     host.replaceChildren();
-    if (!result.posts.length) return renderEmptyFeed('发布第一条日常，或者先添加好友吧');
+    renderFeedTabs(host);
+    if (!result.posts.length) {
+      const msg = currentFeed === 'square' ? '广场还没有公开动态，去发一条公开的吧' : '发布第一条日常，或者先添加好友吧';
+      host.appendChild(feedEmptyNode(msg));
+      return;
+    }
     result.posts.forEach(function (post) { host.appendChild(makePost(post)); });
+  }
+  function feedEmptyNode(message) {
+    const empty = document.createElement('div');
+    empty.className = 'feed-empty';
+    const icon = document.createElement('b');
+    icon.textContent = '>_<';
+    const copy = document.createElement('span');
+    copy.textContent = message;
+    empty.append(icon, copy);
+    return empty;
+  }
+  function renderFeedTabs(host) {
+    const tabs = document.createElement('div');
+    tabs.className = 'feed-tabs';
+    [['friends', '好友'], ['square', '广场']].forEach(function (item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = item[1];
+      button.classList.toggle('active', currentFeed === item[0]);
+      button.addEventListener('click', function () {
+        currentFeed = item[0];
+        loadFeed();
+        if (document.getElementById('profilePage').classList.contains('open')) return;
+      });
+      tabs.appendChild(button);
+    });
+    const chips = document.createElement('div');
+    chips.className = 'category-chips';
+    [['', '全部'], ...CATEGORY_LIST.map(function (c) { return [c, c]; })].forEach(function (item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = item[1];
+      button.classList.toggle('active', currentCategory === item[0]);
+      button.addEventListener('click', function () {
+        currentCategory = item[0];
+        loadFeed();
+      });
+      chips.appendChild(button);
+    });
+    host.append(tabs, chips);
   }
 
   async function refreshFriendState() {
@@ -969,20 +1131,27 @@
   }
 
   function loadMedia(input) {
-    const file = input.files && input.files[0];
-    if (!file) return;
-    if (file.size > 50 * 1024 * 1024) { toast('照片或视频不能超过 50 MB'); input.value = ''; return; }
+    const files = Array.from(input.files || []).slice(0, 9);
+    if (!files.length) return;
+    const oversize = files.find(function (f) { return f.size > 50 * 1024 * 1024; });
+    if (oversize) { toast('照片或视频不能超过 50 MB'); input.value = ''; return; }
+    const merged = selectedMediaFiles.concat(files).slice(0, 9);
+    if (merged.length >= 9 && selectedMediaFiles.length + files.length > 9) toast('最多一次传 9 个媒体');
+    selectedMediaFiles = merged;
     const preview = document.getElementById('preview');
     preview.querySelectorAll('img,video').forEach(function (old) {
       if (old.src && old.src.startsWith('blob:')) URL.revokeObjectURL(old.src);
     });
     preview.style.display = 'block';
     preview.replaceChildren();
-    let element;
-    if (file.type.startsWith('video/')) { element = document.createElement('video'); element.controls = true; }
-    else { element = document.createElement('img'); element.alt = '上传预览'; }
-    element.src = URL.createObjectURL(file);
-    preview.appendChild(element);
+    preview.classList.add('preview-grid');
+    selectedMediaFiles.forEach(function (file) {
+      let element;
+      if (file.type.startsWith('video/')) { element = document.createElement('video'); element.controls = true; }
+      else { element = document.createElement('img'); element.alt = '上传预览'; }
+      element.src = URL.createObjectURL(file);
+      preview.appendChild(element);
+    });
   }
 
   function loadAudio(input) {
@@ -1004,21 +1173,56 @@
     preview.append(name, player);
   }
 
+  // 发布前压缩图片：最长边最大 1600px，JPEG 质量 0.82。视频/音频不压缩。
+  // 任何一步失败都回退到原图上传，绝不让压缩导致发布失败。GIF 不压缩（保留动图）。
+  async function compressImageFile(file) {
+    try {
+      if (!file || !file.type?.startsWith('image/') || file.type === 'image/gif') return file;
+      const bitmap = await createImageBitmap(file);
+      try {
+        const maxSide = Math.max(bitmap.width, bitmap.height);
+        const scale = Math.min(1, 1600 / maxSide);
+        if (scale >= 1) return file;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return file;
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+        if (!blob) return file;
+        const name = file.name.replace(/\.[^.]*$/, '') + '.jpg';
+        return new File([blob], name, { type: 'image/jpeg', lastModified: Date.now() });
+      } finally {
+        if (bitmap.close) bitmap.close();
+      }
+    } catch {
+      return file;
+    }
+  }
+
   async function publishPost() {
     if (!me) return showAuth();
     const caption = document.getElementById('caption');
-    const mediaInput = document.getElementById('photoInput').files?.[0] || document.getElementById('videoInput').files?.[0];
+    const mediaFiles = selectedMediaFiles.length ? selectedMediaFiles : Array.from(document.getElementById('photoInput').files || []).concat(Array.from(document.getElementById('videoInput').files || [])).slice(0, 9);
     const audioFile = document.getElementById('audioInput').files?.[0];
-    if (!caption.value.trim() && !mediaInput && !audioFile && !selectedOnlineTrack) { toast('写点文字或添加照片、视频、配乐吧'); return; }
+    if (!caption.value.trim() && !mediaFiles.length && !audioFile && !selectedOnlineTrack) { toast('写点文字或添加照片、视频、配乐吧'); return; }
+    const visibilityEl = document.getElementById('visibilitySelect');
+    const categoryEl = document.getElementById('categorySelect');
     const form = new FormData();
     form.append('text', caption.value.trim());
+    form.append('visibility', visibilityEl ? visibilityEl.value : 'friends');
+    form.append('category', categoryEl ? categoryEl.value : '日常');
     form.append('music', selectedOnlineTrack ? selectedOnlineTrack.title : '');
     form.append('musicArtist', selectedOnlineTrack ? selectedOnlineTrack.artist : '');
     form.append('musicTrackId', selectedOnlineTrack ? String(selectedOnlineTrack.id) : '');
     form.append('musicSource', selectedOnlineTrack ? (selectedOnlineTrack.source || 'itunes') : '');
     form.append('musicPreviewUrl', selectedOnlineTrack ? (selectedOnlineTrack.previewUrl || '') : '');
     form.append('musicPageUrl', selectedOnlineTrack ? (selectedOnlineTrack.pageUrl || '') : '');
-    if (mediaInput) form.append('media', mediaInput, mediaInput.name);
+    for (const file of mediaFiles) {
+      const uploadMedia = file.type?.startsWith('image/') ? await compressImageFile(file) : file;
+      form.append('media', uploadMedia, uploadMedia.name);
+    }
     if (audioFile) form.append('audio', audioFile, audioFile.name);
     const button = document.querySelector('#modal .publish');
     button.disabled = true;
@@ -1026,6 +1230,7 @@
     try {
       await request('/api/posts', { method: 'POST', body: form });
       caption.value = '';
+      selectedMediaFiles = [];
       document.getElementById('preview').replaceChildren();
       document.getElementById('preview').style.display = 'none';
       document.getElementById('photoInput').value = '';
