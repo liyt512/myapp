@@ -94,6 +94,28 @@ const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((co
 if (!userColumns.has('avatar_name')) db.exec('ALTER TABLE users ADD COLUMN avatar_name TEXT');
 const commentColumns = new Set(db.prepare('PRAGMA table_info(comments)').all().map((column) => column.name));
 if (!commentColumns.has('parent_id')) db.exec('ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE');
+// 一对一私信：user1_id < user2_id 保证一对一唯一。
+db.exec(`
+  CREATE TABLE IF NOT EXISTS direct_conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user1_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user2_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(user1_id, user2_id),
+    CHECK (user1_id < user2_id)
+  );
+  CREATE TABLE IF NOT EXISTS direct_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+    sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    read_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS dm_messages_conv_idx ON direct_messages(conversation_id, created_at);
+  CREATE INDEX IF NOT EXISTS dm_messages_unread_idx ON direct_messages(conversation_id, sender_id, read_at);
+`);
 
 async function getJamendoTracks({ search = '', offset = 0, trackId = null } = {}) {
   if (!jamendoClientId) throw Object.assign(new Error('在线曲库还没有启用：服务器需要配置 Jamendo 客户端编号。'), { status: 503 });
@@ -734,6 +756,114 @@ app.post('/api/posts/:id/comments', requireAuth, (req, res) => {
   }
   const result = db.prepare('INSERT INTO comments (user_id, post_id, text, parent_id, created_at) VALUES (?, ?, ?, ?, ?)').run(req.user.id, postId, text, parentId, now());
   res.status(201).json({ id: result.lastInsertRowid });
+});
+
+// ---------- 一对一私信 (DM) ----------
+// 允许任何两个已注册用户私信（不限制好友）。防骚扰：文本 1-2000 字符 + 同用户 1 分钟最多 20 条。
+const dmRate = new Map();
+function dmRateLimited(userId) {
+  const nowMs = Date.now();
+  const stamps = (dmRate.get(userId) || []).filter((ts) => nowMs - ts < 60 * 1000);
+  if (stamps.length >= 20) { dmRate.set(userId, stamps); return true; }
+  stamps.push(nowMs);
+  dmRate.set(userId, stamps);
+  if (dmRate.size > 5000) { for (const [uid, arr] of dmRate) if (!arr.some((ts) => nowMs - ts < 60 * 1000)) dmRate.delete(uid); }
+  return false;
+}
+function dmConversationFor(id, userId) {
+  const row = db.prepare('SELECT * FROM direct_conversations WHERE id = ? AND (user1_id = ? OR user2_id = ?)').get(id, userId, userId);
+  return row || null;
+}
+function dmOtherId(conversation, myId) {
+  return conversation.user1_id === myId ? conversation.user2_id : conversation.user1_id;
+}
+
+app.get('/api/dm/unread', requireAuth, (req, res) => {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS n FROM direct_messages m
+    JOIN direct_conversations c ON c.id = m.conversation_id
+    WHERE (c.user1_id = ? OR c.user2_id = ?) AND m.sender_id != ? AND m.read_at IS NULL
+  `).get(req.user.id, req.user.id, req.user.id);
+  res.json({ unread: row ? row.n : 0 });
+});
+
+app.get('/api/dm/conversations', requireAuth, (req, res) => {
+  const meId = req.user.id;
+  const rows = db.prepare(`
+    SELECT c.id, c.user1_id, c.user2_id, c.created_at, c.updated_at,
+      u.id AS other_id, u.username AS other_username, u.display_name AS other_display_name, u.avatar_name AS other_avatar_name,
+      (SELECT m.text FROM direct_messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_text,
+      (SELECT m.created_at FROM direct_messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_created_at,
+      (SELECT m.sender_id FROM direct_messages m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_sender_id,
+      (SELECT COUNT(*) FROM direct_messages m WHERE m.conversation_id = c.id AND m.sender_id != ? AND m.read_at IS NULL) AS unread_count
+    FROM direct_conversations c JOIN users u ON u.id = (CASE WHEN c.user1_id = ? THEN c.user2_id ELSE c.user1_id END)
+    WHERE c.user1_id = ? OR c.user2_id = ?
+    ORDER BY c.updated_at DESC
+  `).all(meId, meId, meId, meId);
+  res.json({ conversations: rows.map((row) => ({
+    id: row.id, createdAt: row.created_at, updatedAt: row.updated_at,
+    otherUser: { id: row.other_id, username: row.other_username, displayName: row.other_display_name,
+      avatarUrl: row.other_avatar_name ? makeMediaUrl(row.other_avatar_name, meId) : null },
+    lastMessage: row.last_text ? { text: row.last_text, createdAt: row.last_created_at, senderId: row.last_sender_id } : null,
+    unreadCount: row.unread_count || 0,
+  })) });
+});
+
+app.post('/api/dm/conversations', requireAuth, (req, res) => {
+  const otherId = Number(req.body?.otherUserId);
+  if (!Number.isSafeInteger(otherId) || otherId <= 0) return fail(res, 400, '找不到这个账号。');
+  if (otherId === req.user.id) return fail(res, 400, '不能和自己私信。');
+  if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(otherId)) return fail(res, 404, '找不到这个账号。');
+  const user1 = Math.min(req.user.id, otherId);
+  const user2 = Math.max(req.user.id, otherId);
+  const stamp = now();
+  const existing = db.prepare('SELECT * FROM direct_conversations WHERE user1_id = ? AND user2_id = ?').get(user1, user2);
+  if (existing) return res.json({ id: existing.id, created: false });
+  const result = db.prepare('INSERT INTO direct_conversations (user1_id, user2_id, created_at, updated_at) VALUES (?, ?, ?, ?)').run(user1, user2, stamp, stamp);
+  res.status(201).json({ id: result.lastInsertRowid, created: true });
+});
+
+app.get('/api/dm/conversations/:id/messages', requireAuth, (req, res) => {
+  const convId = Number(req.params.id);
+  const conv = Number.isSafeInteger(convId) ? dmConversationFor(convId, req.user.id) : null;
+  if (!conv) return fail(res, 404, '会话不存在或你不在其中。');
+  const before = req.query.before ? Number(req.query.before) : null;
+  const limitRaw = Number(req.query.limit || 50);
+  const limit = Number.isSafeInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 50;
+  const rows = before && Number.isSafeInteger(before)
+    ? db.prepare(`SELECT m.id, m.sender_id, m.text, m.created_at, m.read_at, u.username, u.display_name, u.avatar_name
+        FROM direct_messages m JOIN users u ON u.id = m.sender_id
+        WHERE m.conversation_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT ?`).all(convId, before, limit)
+    : db.prepare(`SELECT m.id, m.sender_id, m.text, m.created_at, m.read_at, u.username, u.display_name, u.avatar_name
+        FROM direct_messages m JOIN users u ON u.id = m.sender_id
+        WHERE m.conversation_id = ? ORDER BY m.id DESC LIMIT ?`).all(convId, limit);
+  rows.reverse();
+  res.json({ messages: rows.map((m) => ({
+    id: m.id, senderId: m.sender_id, text: m.text, createdAt: m.created_at, readAt: m.read_at,
+    sender: { id: m.sender_id, username: m.username, displayName: m.display_name,
+      avatarUrl: m.avatar_name ? makeMediaUrl(m.avatar_name, req.user.id) : null },
+  })) });
+});
+
+app.post('/api/dm/conversations/:id/messages', requireAuth, (req, res) => {
+  const convId = Number(req.params.id);
+  const conv = Number.isSafeInteger(convId) ? dmConversationFor(convId, req.user.id) : null;
+  if (!conv) return fail(res, 404, '会话不存在或你不在其中。');
+  const text = String(req.body?.text || '').trim();
+  if (!text || text.length > 2000) return fail(res, 400, '私信需要 1 到 2000 个字符。');
+  if (dmRateLimited(req.user.id)) return fail(res, 429, '发送太频繁，请稍后再试。');
+  const stamp = now();
+  const result = db.prepare('INSERT INTO direct_messages (conversation_id, sender_id, text, created_at, read_at) VALUES (?, ?, ?, ?, NULL)').run(convId, req.user.id, text, stamp);
+  db.prepare('UPDATE direct_conversations SET updated_at = ? WHERE id = ?').run(stamp, convId);
+  res.status(201).json({ id: result.lastInsertRowid, createdAt: stamp });
+});
+
+app.post('/api/dm/conversations/:id/read', requireAuth, (req, res) => {
+  const convId = Number(req.params.id);
+  const conv = Number.isSafeInteger(convId) ? dmConversationFor(convId, req.user.id) : null;
+  if (!conv) return fail(res, 404, '会话不存在或你不在其中。');
+  const result = db.prepare('UPDATE direct_messages SET read_at = ? WHERE conversation_id = ? AND sender_id != ? AND read_at IS NULL').run(now(), convId, req.user.id);
+  res.json({ marked: result.changes || 0 });
 });
 
 app.get('/api/media/:filename', (req, res) => {
