@@ -486,18 +486,29 @@
       audio.className = 'post-audio';
       audio.controls = true;
       audio.preload = 'none';
-      audio.src = apiBase + '/api/music/tracks/' + encodeURIComponent(post.musicTrackId) + '/audio';
+      const isItunesPost = post.musicSource === 'itunes';
+      if (isItunesPost && post.musicPreviewUrl) {
+        audio.src = post.musicPreviewUrl;
+      } else if (isItunesPost) {
+        audio.src = apiBase + '/api/music/tracks/' + encodeURIComponent(post.musicTrackId) + '/audio?source=itunes';
+      } else {
+        audio.src = apiBase + '/api/music/tracks/' + encodeURIComponent(post.musicTrackId) + '/audio';
+      }
       audio.setAttribute('aria-label', '播放配乐：' + (post.music || '在线音乐'));
       article.appendChild(audio);
       const credit = document.createElement('small');
       credit.className = 'post-music-credit';
       const creator = document.createElement('span');
-      creator.textContent = '创作者：' + (post.musicArtist || 'Jamendo 音乐人') + ' · 音乐来源：';
+      if (isItunesPost) {
+        creator.textContent = '创作者：' + (post.musicArtist || '未知创作者') + ' · iTunes · 30秒试听 · 音乐来源：';
+      } else {
+        creator.textContent = '创作者：' + (post.musicArtist || 'Jamendo 音乐人') + ' · 音乐来源：';
+      }
       const source = document.createElement('a');
-      source.href = post.musicPageUrl || ('https://www.jamendo.com/track/' + encodeURIComponent(post.musicTrackId));
+      source.href = post.musicPageUrl || (isItunesPost ? 'https://music.apple.com/search?term=' + encodeURIComponent(post.music || '') : ('https://www.jamendo.com/track/' + encodeURIComponent(post.musicTrackId)));
       source.target = '_blank';
       source.rel = 'noopener noreferrer';
-      source.textContent = 'Jamendo 曲目页';
+      source.textContent = isItunesPost ? 'Apple Music 曲目页' : 'Jamendo 曲目页';
       credit.append(creator, source);
       article.appendChild(credit);
     }
@@ -791,8 +802,25 @@
     if (selectedPlayer) selectedPlayer.pause();
   }
 
-  function musicAudioUrl(trackId) {
+  function musicAudioUrl(track) {
+    const trackId = typeof track === 'object' ? track.id : track;
+    const source = typeof track === 'object' ? track.source : '';
+    // iTunes：直接播 30 秒试听 previewUrl，不走后端代理。
+    if (typeof track === 'object' && track.previewUrl && (source === 'itunes' || !source)) return track.previewUrl;
+    if (source === 'itunes') return apiBase + '/api/music/tracks/' + encodeURIComponent(trackId) + '/audio?source=itunes';
     return apiBase + '/api/music/tracks/' + encodeURIComponent(trackId) + '/audio';
+  }
+
+  function musicSourceLabel(track) {
+    if (!track) return '';
+    if (track.source === 'itunes') return 'iTunes · 30秒试听';
+    if (track.source === 'jamendo') return 'Jamendo';
+    return 'iTunes · 30秒试听';
+  }
+
+  function musicPageLabel(track) {
+    if (!track) return '曲目页';
+    return track.source === 'jamendo' ? 'Jamendo 曲目页' : 'Apple Music 曲目页';
   }
 
   function showSelectedTrack(track) {
@@ -800,19 +828,19 @@
     preview.hidden = false;
     preview.replaceChildren();
     const name = document.createElement('span');
-    name.textContent = '已选网络配乐：' + track.title + ' · ' + track.artist;
+    name.textContent = '已选网络配乐：' + track.title + ' · ' + track.artist + '（' + musicSourceLabel(track) + '）';
     const player = document.createElement('audio');
     player.controls = true;
     player.preload = 'none';
-    player.src = musicAudioUrl(track.id);
+    player.src = musicAudioUrl(track);
     const credit = document.createElement('small');
     credit.className = 'music-credit';
-    credit.append(document.createTextNode('创作者：' + track.artist + ' · 音乐来源：'));
+    credit.append(document.createTextNode('创作者：' + track.artist + ' · ' + musicSourceLabel(track) + ' · 音乐来源：'));
     const source = document.createElement('a');
     source.href = track.pageUrl;
     source.target = '_blank';
     source.rel = 'noopener noreferrer';
-    source.textContent = 'Jamendo 曲目页';
+    source.textContent = musicPageLabel(track);
     credit.appendChild(source);
     preview.append(name, player, credit);
   }
@@ -848,7 +876,7 @@
       player.controls = true;
       player.preload = 'none';
       player.style.cssText = 'display:block;width:100%;height:38px;margin-top:8px';
-      player.src = musicAudioUrl(track.id);
+      player.src = musicAudioUrl(track);
       player.dataset.trackId = String(track.id);
       copy.appendChild(player);
       player.addEventListener('error', function () {
@@ -892,14 +920,14 @@
     button.disabled = true;
     try {
       const query = document.getElementById('musicSearch').value.trim();
-      const params = new URLSearchParams({ q: query, offset: String(musicSearchOffset) });
+      const params = new URLSearchParams({ q: query, offset: String(musicSearchOffset), source: 'itunes' });
       const result = await request('/api/music/search?' + params.toString());
       if (reset) results.replaceChildren();
       if (!result.tracks.length && !results.childElementCount) {
         const empty = document.createElement('div');
         empty.className = 'music-track-artist';
         empty.style.padding = '14px';
-        empty.textContent = '没有找到歌曲，试试歌手名或英文风格词。';
+        empty.textContent = '没有找到歌曲，试试中文歌名或歌手名，如 稻香 / 周杰伦。';
         results.appendChild(empty);
       }
       result.tracks.forEach(function (track) {
@@ -912,7 +940,7 @@
         title.textContent = track.title;
         const artist = document.createElement('div');
         artist.className = 'music-track-artist';
-        artist.textContent = track.artist + ' · Jamendo';
+        artist.textContent = track.artist + ' · ' + musicSourceLabel(track);
         copy.append(title, artist);
         const play = document.createElement('button');
         play.type = 'button';
@@ -987,6 +1015,9 @@
     form.append('music', selectedOnlineTrack ? selectedOnlineTrack.title : '');
     form.append('musicArtist', selectedOnlineTrack ? selectedOnlineTrack.artist : '');
     form.append('musicTrackId', selectedOnlineTrack ? String(selectedOnlineTrack.id) : '');
+    form.append('musicSource', selectedOnlineTrack ? (selectedOnlineTrack.source || 'itunes') : '');
+    form.append('musicPreviewUrl', selectedOnlineTrack ? (selectedOnlineTrack.previewUrl || '') : '');
+    form.append('musicPageUrl', selectedOnlineTrack ? (selectedOnlineTrack.pageUrl || '') : '');
     if (mediaInput) form.append('media', mediaInput, mediaInput.name);
     if (audioFile) form.append('audio', audioFile, audioFile.name);
     const button = document.querySelector('#modal .publish');

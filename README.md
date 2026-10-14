@@ -10,7 +10,7 @@ APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。安装包默认连�
 
 ## 后端服务
 
-`server/` 目录包含 Node.js API 服务，使用 SQLite 保存用户、好友关系、动态、点赞和评论；上传的媒体文件保存在服务器持久目录。部署前需要设置随机 `JWT_SECRET`，并由 Nginx 提供 HTTPS。网络音乐功能还需要在私有服务器环境中设置 `JAMENDO_CLIENT_ID`，不要提交到公开仓库。
+`server/` 目录包含 Node.js API 服务，使用 SQLite 保存用户、好友关系、动态、点赞和评论；上传的媒体文件保存在服务器持久目录。部署前需要设置随机 `JWT_SECRET`，并由 Nginx 提供 HTTPS。网络音乐默认用 iTunes Search API 提供中文歌 30 秒试听，不需要额外配置；如需保留旧的 Jamendo 曲库，才需要在私有服务器环境中设置 `JAMENDO_CLIENT_ID`，不要提交到公开仓库。
 
 ```sh
 cd server
@@ -26,7 +26,7 @@ JWT_SECRET="替换为至少 32 字节的随机值" JAMENDO_CLIENT_ID="你的曲�
 
 ## 配乐
 
-应用通过 Jamendo 搜索并播放独立音乐；动态中会显示创作者署名和曲目来源链接。曲库适用于个人非商业用途，不包含抖音等平台的商业热门歌曲。若应用以后收费或展示广告，需要先确认商业音乐授权。
+应用默认通过 iTunes Search API 搜索中文歌并播放 30 秒试听；动态中会显示创作者署名和 Apple Music 来源链接。试听仅用于配乐预览，不是完整歌曲，完整歌曲请用自己有版权的本地音频上传。若应用以后收费或展示广告，需要先确认商业音乐授权。旧的 Jamendo 曲库仍可通过 `source=jamendo` 访问。
 
 ## GitHub Actions
 

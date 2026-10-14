@@ -73,6 +73,9 @@ db.exec(`
 const postColumns = new Set(db.prepare('PRAGMA table_info(posts)').all().map((column) => column.name));
 if (!postColumns.has('music_track_id')) db.exec('ALTER TABLE posts ADD COLUMN music_track_id INTEGER');
 if (!postColumns.has('music_artist')) db.exec('ALTER TABLE posts ADD COLUMN music_artist TEXT');
+if (!postColumns.has('music_source')) db.exec("ALTER TABLE posts ADD COLUMN music_source TEXT");
+if (!postColumns.has('music_preview_url')) db.exec('ALTER TABLE posts ADD COLUMN music_preview_url TEXT');
+if (!postColumns.has('music_page_url')) db.exec('ALTER TABLE posts ADD COLUMN music_page_url TEXT');
 
 async function getJamendoTracks({ search = '', offset = 0, trackId = null } = {}) {
   if (!jamendoClientId) throw Object.assign(new Error('在线曲库还没有启用：服务器需要配置 Jamendo 客户端编号。'), { status: 503 });
@@ -121,6 +124,77 @@ function normalizeJamendoTrack(track) {
     pageUrl,
     licenseUrl: typeof track.license_ccurl === 'string' && track.license_ccurl.startsWith('https://') ? track.license_ccurl : '',
   };
+}
+
+// iTunes Search API：中文歌 30 秒试听。
+// 注意：iTunes API 的 CN 店面在当前网络下经常返回空结果，
+// 所以默认用 TW 店面（中文歌目录最全），0 结果时回退 HK。
+// 返回的 previewUrl 就是 30 秒试听音频，可直接播放。
+async function getItunesTracks({ search = '', offset = 0 } = {}) {
+  const term = (search || '中文流行').slice(0, 80);
+  const fetchFrom = async (country) => {
+    const url = new URL('https://itunes.apple.com/search');
+    url.searchParams.set('term', term);
+    url.searchParams.set('country', country);
+    url.searchParams.set('media', 'music');
+    url.searchParams.set('entity', 'song');
+    url.searchParams.set('limit', '20');
+    url.searchParams.set('offset', String(offset));
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': 'Liubai/1.0' },
+    });
+    if (!response.ok) throw Object.assign(new Error('在线曲库暂时无法连接，请稍后再试。'), { status: 502 });
+    const result = await response.json();
+    if (!Array.isArray(result.results)) {
+      throw Object.assign(new Error('在线曲库暂时无法提供歌曲，请稍后再试。'), { status: 502 });
+    }
+    return result.results;
+  };
+  let results = await fetchFrom('TW');
+  if (!results.length) {
+    try { results = await fetchFrom('HK'); } catch {}
+  }
+  return results;
+}
+
+function normalizeItunesTrack(track) {
+  const id = Number(track.trackId);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  const previewUrl = typeof track.previewUrl === 'string' && track.previewUrl.startsWith('https://') ? track.previewUrl : '';
+  if (!previewUrl) return null;
+  let pageUrl = '';
+  try {
+    const candidate = new URL(track.trackViewUrl);
+    if (candidate.protocol === 'https:' && /(^|\.)apple\.com$/i.test(candidate.hostname)) pageUrl = candidate.toString();
+  } catch {}
+  if (!pageUrl) pageUrl = 'https://music.apple.com/search?term=' + encodeURIComponent(track.trackName || '');
+  const artworkUrl = typeof track.artworkUrl100 === 'string' && track.artworkUrl100.startsWith('https://') ? track.artworkUrl100 : '';
+  return {
+    id,
+    title: String(track.trackName || '未命名歌曲').slice(0, 150),
+    artist: String(track.artistName || '未知创作者').slice(0, 160),
+    previewUrl,
+    artworkUrl,
+    pageUrl,
+    collectionName: typeof track.collectionName === 'string' ? track.collectionName.slice(0, 160) : '',
+    source: 'itunes',
+  };
+}
+
+async function getItunesPreviewUrl(trackId) {
+  for (const country of ['TW', 'HK']) {
+    const url = new URL('https://itunes.apple.com/lookup');
+    url.searchParams.set('id', String(trackId));
+    url.searchParams.set('country', country);
+    url.searchParams.set('entity', 'song');
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'Liubai/1.0' } });
+    if (!response.ok) continue;
+    const result = await response.json();
+    const first = Array.isArray(result.results) ? result.results[0] : null;
+    if (first && typeof first.previewUrl === 'string' && first.previewUrl.startsWith('https://')) return first.previewUrl;
+  }
+  return null;
 }
 
 const app = express();
@@ -218,11 +292,17 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'liubai-api'
 app.get('/api/music/search', requireAuth, async (req, res) => {
   const search = String(req.query.q || '').trim().slice(0, 80);
   const requestedOffset = Number(req.query.offset || 0);
+  const source = String(req.query.source || 'itunes').trim().toLowerCase();
   if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 2000) return fail(res, 400, '歌曲页码无效。');
   try {
-    const tracks = await getJamendoTracks({ search, offset: requestedOffset });
-    const normalized = tracks.map(normalizeJamendoTrack).filter(Boolean);
-    res.json({ tracks: normalized, hasMore: normalized.length === 20, offset: requestedOffset });
+    if (source === 'jamendo') {
+      const tracks = await getJamendoTracks({ search, offset: requestedOffset });
+      const normalized = tracks.map(normalizeJamendoTrack).filter(Boolean).map((t) => ({ ...t, source: 'jamendo' }));
+      return res.json({ tracks: normalized, hasMore: normalized.length === 20, offset: requestedOffset, source: 'jamendo' });
+    }
+    const tracks = await getItunesTracks({ search, offset: requestedOffset });
+    const normalized = tracks.map(normalizeItunesTrack).filter(Boolean);
+    res.json({ tracks: normalized, hasMore: normalized.length === 20, offset: requestedOffset, source: 'itunes' });
   } catch (error) {
     fail(res, error.status || 502, error.message || '在线曲库暂时无法连接，请稍后再试。');
   }
@@ -230,8 +310,15 @@ app.get('/api/music/search', requireAuth, async (req, res) => {
 
 app.get('/api/music/tracks/:id/audio', async (req, res) => {
   const trackId = Number(req.params.id);
+  const source = String(req.query.source || '').trim().toLowerCase();
   if (!Number.isSafeInteger(trackId) || trackId <= 0) return fail(res, 400, '歌曲编号无效。');
   try {
+    if (source === 'itunes') {
+      const previewUrl = await getItunesPreviewUrl(trackId);
+      if (!previewUrl) return fail(res, 404, '这首歌曲暂时不能播放。');
+      res.set('Cache-Control', 'no-store');
+      return res.redirect(302, previewUrl);
+    }
     const tracks = await getJamendoTracks({ trackId });
     const track = tracks[0];
     if (!track || typeof track.audio !== 'string') return fail(res, 404, '这首歌曲暂时不能播放。');
@@ -388,6 +475,20 @@ app.post('/api/posts', requireAuth, upload.fields([{ name: 'media', maxCount: 1 
   const musicArtist = String(req.body?.musicArtist || '').trim();
   const musicTrackIdText = String(req.body?.musicTrackId || '').trim();
   const musicTrackId = musicTrackIdText ? Number(musicTrackIdText) : null;
+  const musicSourceRaw = String(req.body?.musicSource || '').trim().toLowerCase();
+  const musicSource = musicSourceRaw === 'jamendo' ? 'jamendo' : (musicTrackId ? 'itunes' : null);
+  let musicPreviewUrl = String(req.body?.musicPreviewUrl || '').trim().slice(0, 1000);
+  let musicPageUrl = String(req.body?.musicPageUrl || '').trim().slice(0, 1000);
+  // 只接受 https 的预览 / 来源链接，避免存入非法 URL。
+  if (musicPreviewUrl && !musicPreviewUrl.startsWith('https://')) musicPreviewUrl = '';
+  if (musicPageUrl && !musicPageUrl.startsWith('https://')) musicPageUrl = '';
+  // iTunes 试听链接必须是 Apple 官方域名；Jamendo 旧逻辑不走这里。
+  if (musicSource === 'itunes' && musicPreviewUrl) {
+    try {
+      const u = new URL(musicPreviewUrl);
+      if (!/(^|\.)apple\.com$/i.test(u.hostname) && u.hostname !== 'audio-ssl.itunes.apple.com') musicPreviewUrl = '';
+    } catch { musicPreviewUrl = ''; }
+  }
   const media = req.files?.media?.[0] || null;
   const audio = req.files?.audio?.[0] || null;
   if (text.length > 2000) return fail(res, 400, '文字最多 2000 个字符。');
@@ -401,8 +502,8 @@ app.post('/api/posts', requireAuth, upload.fields([{ name: 'media', maxCount: 1 
   try {
     mediaName = saveUpload(media);
     audioName = saveUpload(audio);
-    const result = db.prepare('INSERT INTO posts (user_id, text, music, media_name, media_type, audio_name, music_track_id, music_artist, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(req.user.id, text, music, mediaName, media?.mimetype || null, audioName, musicTrackId, musicArtist || null, now());
+    const result = db.prepare('INSERT INTO posts (user_id, text, music, media_name, media_type, audio_name, music_track_id, music_artist, music_source, music_preview_url, music_page_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(req.user.id, text, music, mediaName, media?.mimetype || null, audioName, musicTrackId, musicArtist || null, musicSource, musicPreviewUrl || null, musicPageUrl || null, now());
     res.status(201).json({ id: result.lastInsertRowid });
   } catch (error) {
     for (const filename of [mediaName, audioName]) if (filename) fs.rmSync(path.join(mediaDir, filename), { force: true });
@@ -433,7 +534,7 @@ function makeMediaUrl(filename, userId) {
 app.get('/api/posts', requireAuth, (req, res) => {
   const userId = req.user.id;
   const posts = db.prepare(`
-    SELECT p.id, p.user_id, p.text, p.music, p.music_track_id, p.music_artist, p.media_name, p.media_type, p.audio_name, p.created_at,
+    SELECT p.id, p.user_id, p.text, p.music, p.music_track_id, p.music_artist, p.music_source, p.music_preview_url, p.music_page_url, p.media_name, p.media_type, p.audio_name, p.created_at,
       u.username, u.display_name,
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
@@ -453,7 +554,9 @@ app.get('/api/posts', requireAuth, (req, res) => {
     music: post.music,
     musicTrackId: post.music_track_id,
     musicArtist: post.music_artist,
-    musicPageUrl: post.music_track_id ? 'https://www.jamendo.com/track/' + post.music_track_id : null,
+    musicSource: post.music_source || (post.music_track_id ? 'jamendo' : null),
+    musicPreviewUrl: post.music_preview_url || null,
+    musicPageUrl: post.music_page_url || (post.music_track_id ? 'https://www.jamendo.com/track/' + post.music_track_id : null),
     mediaType: post.media_type,
     mediaUrl: makeMediaUrl(post.media_name, userId),
     audioUrl: makeMediaUrl(post.audio_name, userId),
