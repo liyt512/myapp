@@ -9,6 +9,8 @@ import express from 'express';
 import helmet from 'helmet';
 import multer from 'multer';
 
+const writeFile = promisify(fs.writeFile);
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR || path.resolve(__dirname, '../data');
 const mediaDir = path.join(dataDir, 'uploads');
@@ -76,6 +78,20 @@ if (!postColumns.has('music_artist')) db.exec('ALTER TABLE posts ADD COLUMN musi
 if (!postColumns.has('music_source')) db.exec("ALTER TABLE posts ADD COLUMN music_source TEXT");
 if (!postColumns.has('music_preview_url')) db.exec('ALTER TABLE posts ADD COLUMN music_preview_url TEXT');
 if (!postColumns.has('music_page_url')) db.exec('ALTER TABLE posts ADD COLUMN music_page_url TEXT');
+if (!postColumns.has('visibility')) db.exec("ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'friends'");
+if (!postColumns.has('category')) db.exec("ALTER TABLE posts ADD COLUMN category TEXT DEFAULT '日常'");
+db.exec(`
+  CREATE TABLE IF NOT EXISTS post_media (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    media_name TEXT NOT NULL,
+    media_type TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS post_media_post_idx ON post_media(post_id, sort_order);
+`);
+const commentColumns = new Set(db.prepare('PRAGMA table_info(comments)').all().map((column) => column.name));
+if (!commentColumns.has('parent_id')) db.exec('ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE');
 
 async function getJamendoTracks({ search = '', offset = 0, trackId = null } = {}) {
   if (!jamendoClientId) throw Object.assign(new Error('在线曲库还没有启用：服务器需要配置 Jamendo 客户端编号。'), { status: 503 });
@@ -450,7 +466,7 @@ const extensions = new Map([
 const storage = multer.memoryStorage();
 const upload = multer({
   storage,
-  limits: { files: 2, fileSize: maxMediaBytes },
+  limits: { files: 10, fileSize: maxMediaBytes },
   fileFilter: (_req, file, callback) => {
     const extension = extensions.get(file.mimetype.toLowerCase());
     const isAudio = file.fieldname === 'audio';
@@ -461,15 +477,26 @@ const upload = multer({
     callback(null, true);
   },
 });
-const saveUpload = (file) => {
+const saveUpload = async (file) => {
   if (!file) return null;
   if (file.fieldname === 'audio' && file.size > maxAudioBytes) throw new Error('配乐文件不能超过 20 MB。');
   const filename = crypto.randomUUID() + extensions.get(file.mimetype.toLowerCase());
-  fs.writeFileSync(path.join(mediaDir, filename), file.buffer, { mode: 0o640, flag: 'wx' });
+  await writeFile(path.join(mediaDir, filename), file.buffer, { mode: 0o640, flag: 'wx' });
   return filename;
 };
 
-app.post('/api/posts', requireAuth, upload.fields([{ name: 'media', maxCount: 1 }, { name: 'audio', maxCount: 1 }]), (req, res, next) => {
+const VISIBILITIES = ['public', 'friends', 'private'];
+const CATEGORIES = ['日常', '美食', '旅行', '心情', '学习', '运动', '其他'];
+function normalizeVisibility(value) {
+  const v = String(value || '').trim().toLowerCase();
+  return VISIBILITIES.includes(v) ? v : 'friends';
+}
+function normalizeCategory(value) {
+  const c = String(value || '').trim().slice(0, 12);
+  return CATEGORIES.includes(c) ? c : '日常';
+}
+
+app.post('/api/posts', requireAuth, upload.fields([{ name: 'media', maxCount: 9 }, { name: 'audio', maxCount: 1 }]), async (req, res, next) => {
   const text = String(req.body?.text || '').trim();
   const music = String(req.body?.music || '').trim();
   const musicArtist = String(req.body?.musicArtist || '').trim();
@@ -489,38 +516,68 @@ app.post('/api/posts', requireAuth, upload.fields([{ name: 'media', maxCount: 1 
       if (!/(^|\.)apple\.com$/i.test(u.hostname) && u.hostname !== 'audio-ssl.itunes.apple.com') musicPreviewUrl = '';
     } catch { musicPreviewUrl = ''; }
   }
-  const media = req.files?.media?.[0] || null;
+  const visibility = normalizeVisibility(req.body?.visibility);
+  const category = normalizeCategory(req.body?.category);
+  const mediaFiles = Array.isArray(req.files?.media) ? req.files.media.slice(0, 9) : [];
   const audio = req.files?.audio?.[0] || null;
   if (text.length > 2000) return fail(res, 400, '文字最多 2000 个字符。');
   if (music.length > 160) return fail(res, 400, '配乐名称太长。');
   if (musicArtist.length > 160) return fail(res, 400, '创作者名称太长。');
   if (musicTrackId !== null && (!Number.isSafeInteger(musicTrackId) || musicTrackId <= 0)) return fail(res, 400, '所选歌曲无效，请重新选择。');
   if (audio && musicTrackId) return fail(res, 400, '请只选择一种配乐来源。');
-  if (!text && !media && !audio && !musicTrackId) return fail(res, 400, '请添加文字、照片、视频或配乐。');
+  if (!text && !mediaFiles.length && !audio && !musicTrackId) return fail(res, 400, '请添加文字、照片、视频或配乐。');
   let mediaName = null;
+  let mediaType = null;
   let audioName = null;
+  const savedMedia = [];
   try {
-    mediaName = saveUpload(media);
-    audioName = saveUpload(audio);
-    const result = db.prepare('INSERT INTO posts (user_id, text, music, media_name, media_type, audio_name, music_track_id, music_artist, music_source, music_preview_url, music_page_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(req.user.id, text, music, mediaName, media?.mimetype || null, audioName, musicTrackId, musicArtist || null, musicSource, musicPreviewUrl || null, musicPageUrl || null, now());
-    res.status(201).json({ id: result.lastInsertRowid });
+    for (const file of mediaFiles) {
+      const saved = await saveUpload(file);
+      savedMedia.push({ name: saved, type: file.mimetype || null });
+    }
+    audioName = await saveUpload(audio);
+    if (savedMedia.length) { mediaName = savedMedia[0].name; mediaType = savedMedia[0].type; }
+    const result = db.prepare('INSERT INTO posts (user_id, text, music, media_name, media_type, audio_name, music_track_id, music_artist, music_source, music_preview_url, music_page_url, visibility, category, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(req.user.id, text, music, mediaName, mediaType, audioName, musicTrackId, musicArtist || null, musicSource, musicPreviewUrl || null, musicPageUrl || null, visibility, category, now());
+    const postId = result.lastInsertRowid;
+    savedMedia.forEach(function (item, index) {
+      db.prepare('INSERT INTO post_media (post_id, media_name, media_type, sort_order) VALUES (?, ?, ?, ?)').run(postId, item.name, item.type, index);
+    });
+    res.status(201).json({ id: postId });
   } catch (error) {
-    for (const filename of [mediaName, audioName]) if (filename) fs.rmSync(path.join(mediaDir, filename), { force: true });
+    for (const item of savedMedia) if (item.name) fs.rmSync(path.join(mediaDir, item.name), { force: true });
+    for (const filename of [audioName]) if (filename) fs.rmSync(path.join(mediaDir, filename), { force: true });
     next(error);
   }
 });
 
-function mayViewPost(postId, userId) {
-  return db.prepare(`
-    SELECT 1 FROM posts p WHERE p.id = ? AND (
-      p.user_id = ? OR EXISTS (
-        SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND (
-          (f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?)
-        )
-      )
+function isFriendOf(viewerId, ownerId) {
+  if (viewerId === ownerId) return true;
+  return !!db.prepare(`
+    SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND (
+      (f.from_user = ? AND f.to_user = ?) OR (f.from_user = ? AND f.to_user = ?)
     )
-  `).get(postId, userId, userId, userId);
+  `).get(ownerId, viewerId, viewerId, ownerId);
+}
+function mayViewPost(postId, userId) {
+  const row = db.prepare('SELECT user_id, visibility FROM posts WHERE id = ?').get(postId);
+  if (!row) return null;
+  const visibility = row.visibility || 'friends';
+  if (row.user_id === userId) return row;
+  if (visibility === 'public') return row;
+  if (visibility === 'private') return null;
+  return isFriendOf(userId, row.user_id) ? row : null;
+}
+function postMediaFor(postIds, userId) {
+  if (!postIds.length) return new Map();
+  const placeholders = postIds.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT post_id, media_name, media_type FROM post_media WHERE post_id IN (${placeholders}) ORDER BY post_id, sort_order`).all(...postIds);
+  const map = new Map(postIds.map((id) => [id, []]));
+  rows.forEach(function (row) {
+    const url = makeMediaUrl(row.media_name, userId);
+    if (url) map.get(row.post_id).push({ type: row.media_type || '', url });
+  });
+  return map;
 }
 
 function makeMediaUrl(filename, userId) {
@@ -533,19 +590,35 @@ function makeMediaUrl(filename, userId) {
 
 app.get('/api/posts', requireAuth, (req, res) => {
   const userId = req.user.id;
-  const posts = db.prepare(`
-    SELECT p.id, p.user_id, p.text, p.music, p.music_track_id, p.music_artist, p.music_source, p.music_preview_url, p.music_page_url, p.media_name, p.media_type, p.audio_name, p.created_at,
+  const feed = String(req.query.feed || 'friends').trim().toLowerCase() === 'square' ? 'square' : 'friends';
+  const categoryParam = String(req.query.category || '').trim().slice(0, 12);
+  const categoryFilter = CATEGORIES.includes(categoryParam) ? categoryParam : null;
+  let where;
+  let params;
+  if (feed === 'square') {
+    where = "COALESCE(p.visibility, 'friends') = 'public'";
+    params = [userId];
+    if (categoryFilter) { where += ' AND COALESCE(p.category, \'日常\') = ?'; params.push(categoryFilter); }
+  } else {
+    where = `(p.user_id = ? OR (COALESCE(p.visibility, 'friends') IN ('public', 'friends') AND EXISTS (
+      SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND (
+        (f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?)
+      )
+    )))`;
+    params = [userId, userId, userId, userId];
+    if (categoryFilter) { where += ' AND COALESCE(p.category, \'日常\') = ?'; params.push(categoryFilter); }
+  }
+  const rows = db.prepare(`
+    SELECT p.id, p.user_id, p.text, p.music, p.music_track_id, p.music_artist, p.music_source, p.music_preview_url, p.music_page_url, p.media_name, p.media_type, p.audio_name, p.visibility, p.category, p.created_at,
       u.username, u.display_name,
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
     FROM posts p JOIN users u ON u.id = p.user_id
-    WHERE p.user_id = ? OR EXISTS (
-      SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND (
-        (f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?)
-      )
-    )
-    ORDER BY p.created_at DESC LIMIT 100
-  `).all(userId, userId, userId, userId).map((post) => ({
+    WHERE ${where}
+    ORDER BY p.created_at DESC LIMIT 50
+  `).all(...params);
+  const mediaMap = postMediaFor(rows.map((r) => r.id), userId);
+  const posts = rows.map((post) => ({
     id: post.id,
     userId: post.user_id,
     username: post.username,
@@ -559,21 +632,27 @@ app.get('/api/posts', requireAuth, (req, res) => {
     musicPageUrl: post.music_page_url || (post.music_track_id ? 'https://www.jamendo.com/track/' + post.music_track_id : null),
     mediaType: post.media_type,
     mediaUrl: makeMediaUrl(post.media_name, userId),
+    media: mediaMap.get(post.id) || [],
     audioUrl: makeMediaUrl(post.audio_name, userId),
+    visibility: post.visibility || 'friends',
+    category: post.category || '日常',
     createdAt: post.created_at,
     likeCount: post.like_count,
     liked: Boolean(post.liked),
     owned: post.user_id === userId,
   }));
-  res.json({ posts });
+  res.json({ posts, feed });
 });
 
 app.delete('/api/posts/:id', requireAuth, (req, res) => {
   const postId = Number(req.params.id);
   const post = db.prepare('SELECT media_name, audio_name FROM posts WHERE id = ? AND user_id = ?').get(postId, req.user.id);
   if (!post) return fail(res, 404, '日常不存在或你没有删除权限。');
+  const extra = db.prepare('SELECT media_name FROM post_media WHERE post_id = ?').all(postId);
+  db.prepare('DELETE FROM post_media WHERE post_id = ?').run(postId);
   db.prepare('DELETE FROM posts WHERE id = ? AND user_id = ?').run(postId, req.user.id);
-  for (const filename of [post.media_name, post.audio_name]) if (filename) fs.rmSync(path.join(mediaDir, filename), { force: true });
+  const files = [post.media_name, post.audio_name, ...extra.map((r) => r.media_name)];
+  for (const filename of files) if (filename) fs.rmSync(path.join(mediaDir, filename), { force: true });
   res.json({ deleted: true });
 });
 
@@ -594,11 +673,18 @@ app.get('/api/posts/:id/comments', requireAuth, (req, res) => {
   const postId = Number(req.params.id);
   if (!mayViewPost(postId, req.user.id)) return fail(res, 404, '日常不存在或暂不可见。');
   const comments = db.prepare(`
-    SELECT c.id, c.text, c.created_at, u.username, u.display_name FROM comments c
-    JOIN users u ON u.id = c.user_id WHERE c.post_id = ? ORDER BY c.created_at LIMIT 100
+    SELECT c.id, c.text, c.created_at, c.parent_id, u.username, u.display_name,
+      pu.display_name AS parent_display_name, pu.username AS parent_username FROM comments c
+    JOIN users u ON u.id = c.user_id
+    LEFT JOIN comments pc ON pc.id = c.parent_id
+    LEFT JOIN users pu ON pu.id = pc.user_id
+    WHERE c.post_id = ? ORDER BY c.created_at LIMIT 100
   `).all(postId).map((comment) => ({
     id: comment.id, text: comment.text, createdAt: comment.created_at,
     username: comment.username, displayName: comment.display_name,
+    parentId: comment.parent_id || null,
+    parentUsername: comment.parent_username || null,
+    parentDisplayName: comment.parent_display_name || null,
   }));
   res.json({ comments });
 });
@@ -608,7 +694,15 @@ app.post('/api/posts/:id/comments', requireAuth, (req, res) => {
   const text = String(req.body?.text || '').trim();
   if (!text || text.length > 500) return fail(res, 400, '评论需要 1 到 500 个字符。');
   if (!mayViewPost(postId, req.user.id)) return fail(res, 404, '日常不存在或暂不可见。');
-  const result = db.prepare('INSERT INTO comments (user_id, post_id, text, created_at) VALUES (?, ?, ?, ?)').run(req.user.id, postId, text, now());
+  let parentId = null;
+  const parentRaw = req.body?.parentId;
+  if (parentRaw !== undefined && parentRaw !== null && parentRaw !== '') {
+    parentId = Number(parentRaw);
+    if (!Number.isSafeInteger(parentId) || parentId <= 0) return fail(res, 400, '回复的评论不存在。');
+    const parent = db.prepare('SELECT id FROM comments WHERE id = ? AND post_id = ?').get(parentId, postId);
+    if (!parent) return fail(res, 400, '回复的评论不存在。');
+  }
+  const result = db.prepare('INSERT INTO comments (user_id, post_id, text, parent_id, created_at) VALUES (?, ?, ?, ?, ?)').run(req.user.id, postId, text, parentId, now());
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
@@ -624,8 +718,10 @@ app.get('/api/media/:filename', (req, res) => {
   let actual;
   try { actual = Buffer.from(signature, 'base64url'); } catch { return fail(res, 403, '媒体链接无效。'); }
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return fail(res, 403, '媒体链接无效。');
-  if (!db.prepare('SELECT 1 FROM posts WHERE (media_name = ? OR audio_name = ?) AND (user_id = ? OR EXISTS (SELECT 1 FROM friend_requests f WHERE f.status = \'accepted\' AND ((f.from_user = posts.user_id AND f.to_user = ?) OR (f.to_user = posts.user_id AND f.from_user = ?))))')
-    .get(filename, filename, userId, userId, userId)) return fail(res, 404, '媒体不存在或暂不可见。');
+  if (!db.prepare(`
+    SELECT 1 FROM posts p WHERE (p.media_name = ? OR p.audio_name = ? OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_name = ?))
+    AND (p.user_id = ? OR COALESCE(p.visibility, 'friends') = 'public' OR (COALESCE(p.visibility, 'friends') = 'friends' AND EXISTS (SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND ((f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?)))))
+  `).get(filename, filename, filename, userId, userId, userId)) return fail(res, 404, '媒体不存在或暂不可见。');
   const absolutePath = path.join(mediaDir, filename);
   if (!fs.existsSync(absolutePath)) return fail(res, 404, '媒体文件不存在。');
   res.set('Cache-Control', 'private, max-age=300');
