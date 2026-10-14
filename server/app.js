@@ -90,6 +90,8 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS post_media_post_idx ON post_media(post_id, sort_order);
 `);
+const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+if (!userColumns.has('avatar_name')) db.exec('ALTER TABLE users ADD COLUMN avatar_name TEXT');
 const commentColumns = new Set(db.prepare('PRAGMA table_info(comments)').all().map((column) => column.name));
 if (!commentColumns.has('parent_id')) db.exec('ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE');
 
@@ -228,11 +230,12 @@ app.use(express.json({ limit: '256kb' }));
 
 const b64url = (value) => Buffer.from(value).toString('base64url');
 const now = () => new Date().toISOString();
-const publicUser = (row) => ({
+const publicUser = (row, viewerId) => ({
   id: row.id,
   username: row.username,
   displayName: row.display_name,
   createdAt: row.created_at,
+  avatarUrl: row.avatar_name ? makeMediaUrl(row.avatar_name, viewerId || row.id) : null,
 });
 
 function signToken(user) {
@@ -293,7 +296,7 @@ function requireAuth(req, res, next) {
   const header = req.get('authorization') || '';
   const userId = verifyToken(header.startsWith('Bearer ') ? header.slice(7) : '');
   if (!userId) return res.status(401).json({ error: '登录已失效，请重新登录。' });
-  const user = db.prepare('SELECT id, username, display_name, created_at FROM users WHERE id = ?').get(userId);
+  const user = db.prepare('SELECT id, username, display_name, avatar_name, created_at FROM users WHERE id = ?').get(userId);
   if (!user) return res.status(401).json({ error: '账号不存在，请重新登录。' });
   req.user = user;
   next();
@@ -360,8 +363,8 @@ app.post('/api/register', limitAuthAttempts, async (req, res, next) => {
     const createdAt = now();
     const result = db.prepare('INSERT INTO users (username, display_name, password_hash, created_at) VALUES (?, ?, ?, ?)')
       .run(username, displayName, passwordHash, createdAt);
-    const user = db.prepare('SELECT id, username, display_name, created_at FROM users WHERE id = ?').get(result.lastInsertRowid);
-    return res.status(201).json({ token: signToken(user), user: publicUser(user) });
+    const user = db.prepare('SELECT id, username, display_name, avatar_name, created_at FROM users WHERE id = ?').get(result.lastInsertRowid);
+    return res.status(201).json({ token: signToken(user), user: publicUser(user, user.id) });
   } catch (error) { next(error); }
 });
 
@@ -371,7 +374,7 @@ app.post('/api/login', limitAuthAttempts, async (req, res, next) => {
     const password = String(req.body?.password || '');
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
     if (!user || !(await checkPassword(password, user.password_hash))) return fail(res, 401, '账号或密码不正确。');
-    return res.json({ token: signToken(user), user: publicUser(user) });
+    return res.json({ token: signToken(user), user: publicUser(user, user.id) });
   } catch (error) { next(error); }
 });
 
@@ -379,35 +382,35 @@ app.get('/api/me', requireAuth, (req, res) => {
   const friends = db.prepare("SELECT COUNT(*) AS n FROM friend_requests WHERE status = 'accepted' AND (from_user = ? OR to_user = ?)").get(req.user.id, req.user.id).n;
   const posts = db.prepare('SELECT COUNT(*) AS n FROM posts WHERE user_id = ?').get(req.user.id).n;
   const likes = db.prepare('SELECT COUNT(*) AS n FROM likes l JOIN posts p ON p.id = l.post_id WHERE p.user_id = ?').get(req.user.id).n;
-  res.json({ ...publicUser(req.user), friendCount: friends, postCount: posts, likeCount: likes });
+  res.json({ ...publicUser(req.user, req.user.id), friendCount: friends, postCount: posts, likeCount: likes });
 });
 
 app.get('/api/users', requireAuth, (req, res) => {
   const query = String(req.query.q || '').trim().toLowerCase();
   if (query.length < 2 || query.length > 40) return res.json({ users: [] });
   const users = db.prepare(`
-    SELECT id, username, display_name, created_at FROM users
+    SELECT id, username, display_name, avatar_name, created_at FROM users
     WHERE id != ? AND (username LIKE ? ESCAPE '\\' OR lower(display_name) LIKE ? ESCAPE '\\')
     ORDER BY username LIMIT 30
   `).all(req.user.id, query.replace(/[\\%_]/g, '\\$&') + '%', '%' + query.replace(/[\\%_]/g, '\\$&') + '%');
-  res.json({ users: users.map(publicUser) });
+  res.json({ users: users.map((u) => publicUser(u, req.user.id)) });
 });
 
 app.get('/api/friends', requireAuth, (req, res) => {
   const id = req.user.id;
   const friends = db.prepare(`
-    SELECT u.id, u.username, u.display_name, u.created_at FROM friend_requests f
+    SELECT u.id, u.username, u.display_name, u.avatar_name, u.created_at FROM friend_requests f
     JOIN users u ON u.id = CASE WHEN f.from_user = ? THEN f.to_user ELSE f.from_user END
     WHERE f.status = 'accepted' AND (f.from_user = ? OR f.to_user = ?) ORDER BY u.display_name
-  `).all(id, id, id).map(publicUser);
+  `).all(id, id, id).map((u) => publicUser(u, id));
   const incoming = db.prepare(`
-    SELECT f.id AS request_id, u.id, u.username, u.display_name, u.created_at FROM friend_requests f
+    SELECT f.id AS request_id, u.id, u.username, u.display_name, u.avatar_name, u.created_at FROM friend_requests f
     JOIN users u ON u.id = f.from_user WHERE f.to_user = ? AND f.status = 'pending' ORDER BY f.created_at DESC
-  `).all(id).map((row) => ({ requestId: row.request_id, user: publicUser(row) }));
+  `).all(id).map((row) => ({ requestId: row.request_id, user: publicUser(row, id) }));
   const outgoing = db.prepare(`
-    SELECT f.id AS request_id, u.id, u.username, u.display_name, u.created_at FROM friend_requests f
+    SELECT f.id AS request_id, u.id, u.username, u.display_name, u.avatar_name, u.created_at FROM friend_requests f
     JOIN users u ON u.id = f.to_user WHERE f.from_user = ? AND f.status = 'pending' ORDER BY f.created_at DESC
-  `).all(id).map((row) => ({ requestId: row.request_id, user: publicUser(row) }));
+  `).all(id).map((row) => ({ requestId: row.request_id, user: publicUser(row, id) }));
   res.json({ friends, incoming, outgoing });
 });
 
@@ -459,7 +462,9 @@ app.delete('/api/friends/:userId', requireAuth, (req, res) => {
 
 const extensions = new Map([
   ['image/jpeg', '.jpg'], ['image/png', '.png'], ['image/webp', '.webp'], ['image/gif', '.gif'],
+  ['image/heic', '.heic'], ['image/heif', '.heif'], ['image/avif', '.avif'],
   ['video/mp4', '.mp4'], ['video/webm', '.webm'], ['video/quicktime', '.mov'],
+  ['video/3gpp', '.3gp'], ['video/x-matroska', '.mkv'], ['video/x-msvideo', '.avi'],
   ['audio/mpeg', '.mp3'], ['audio/mp4', '.m4a'], ['audio/aac', '.aac'],
   ['audio/wav', '.wav'], ['audio/x-wav', '.wav'], ['audio/ogg', '.ogg'], ['audio/webm', '.webm'],
 ]);
@@ -484,6 +489,29 @@ const saveUpload = async (file) => {
   await writeFile(path.join(mediaDir, filename), file.buffer, { mode: 0o640, flag: 'wx' });
   return filename;
 };
+
+const maxAvatarBytes = 5 * 1024 * 1024;
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: maxAvatarBytes },
+  fileFilter: (_req, file, callback) => {
+    const ok = file.fieldname === 'avatar' && ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.mimetype.toLowerCase());
+    if (!ok) return callback(new Error('文件格式不支持，请选择 JPG、PNG、WebP 或 GIF 头像。'));
+    callback(null, true);
+  },
+});
+app.post('/api/me/avatar', requireAuth, avatarUpload.single('avatar'), async (req, res, next) => {
+  try {
+    const file = req.file;
+    if (!file) return fail(res, 400, '请选择一张头像图片。');
+    if (file.size > maxAvatarBytes) return fail(res, 400, '头像不能超过 5 MB。');
+    const filename = await saveUpload(file);
+    const old = db.prepare('SELECT avatar_name FROM users WHERE id = ?').get(req.user.id);
+    db.prepare('UPDATE users SET avatar_name = ? WHERE id = ?').run(filename, req.user.id);
+    if (old?.avatar_name) fs.rmSync(path.join(mediaDir, old.avatar_name), { force: true });
+    res.json({ avatarUrl: makeMediaUrl(filename, req.user.id) });
+  } catch (error) { next(error); }
+});
 
 const VISIBILITIES = ['public', 'friends', 'private'];
 const CATEGORIES = ['日常', '美食', '旅行', '心情', '学习', '运动', '其他'];
@@ -610,7 +638,7 @@ app.get('/api/posts', requireAuth, (req, res) => {
   }
   const rows = db.prepare(`
     SELECT p.id, p.user_id, p.text, p.music, p.music_track_id, p.music_artist, p.music_source, p.music_preview_url, p.music_page_url, p.media_name, p.media_type, p.audio_name, p.visibility, p.category, p.created_at,
-      u.username, u.display_name,
+      u.username, u.display_name, u.avatar_name,
       (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
     FROM posts p JOIN users u ON u.id = p.user_id
@@ -623,6 +651,7 @@ app.get('/api/posts', requireAuth, (req, res) => {
     userId: post.user_id,
     username: post.username,
     displayName: post.display_name,
+    avatarUrl: post.avatar_name ? makeMediaUrl(post.avatar_name, userId) : null,
     text: post.text,
     music: post.music,
     musicTrackId: post.music_track_id,
@@ -673,7 +702,7 @@ app.get('/api/posts/:id/comments', requireAuth, (req, res) => {
   const postId = Number(req.params.id);
   if (!mayViewPost(postId, req.user.id)) return fail(res, 404, '日常不存在或暂不可见。');
   const comments = db.prepare(`
-    SELECT c.id, c.text, c.created_at, c.parent_id, u.username, u.display_name,
+    SELECT c.id, c.text, c.created_at, c.parent_id, u.username, u.display_name, u.avatar_name,
       pu.display_name AS parent_display_name, pu.username AS parent_username FROM comments c
     JOIN users u ON u.id = c.user_id
     LEFT JOIN comments pc ON pc.id = c.parent_id
@@ -682,6 +711,7 @@ app.get('/api/posts/:id/comments', requireAuth, (req, res) => {
   `).all(postId).map((comment) => ({
     id: comment.id, text: comment.text, createdAt: comment.created_at,
     username: comment.username, displayName: comment.display_name,
+    avatarUrl: comment.avatar_name ? makeMediaUrl(comment.avatar_name, req.user.id) : null,
     parentId: comment.parent_id || null,
     parentUsername: comment.parent_username || null,
     parentDisplayName: comment.parent_display_name || null,
@@ -719,9 +749,11 @@ app.get('/api/media/:filename', (req, res) => {
   try { actual = Buffer.from(signature, 'base64url'); } catch { return fail(res, 403, '媒体链接无效。'); }
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return fail(res, 403, '媒体链接无效。');
   if (!db.prepare(`
-    SELECT 1 FROM posts p WHERE (p.media_name = ? OR p.audio_name = ? OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_name = ?))
-    AND (p.user_id = ? OR COALESCE(p.visibility, 'friends') = 'public' OR (COALESCE(p.visibility, 'friends') = 'friends' AND EXISTS (SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND ((f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?)))))
-  `).get(filename, filename, filename, userId, userId, userId)) return fail(res, 404, '媒体不存在或暂不可见。');
+    SELECT 1 WHERE EXISTS (
+      SELECT 1 FROM posts p WHERE (p.media_name = ? OR p.audio_name = ? OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_name = ?))
+      AND (p.user_id = ? OR COALESCE(p.visibility, 'friends') = 'public' OR (COALESCE(p.visibility, 'friends') = 'friends' AND EXISTS (SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND ((f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?))))))
+    ) OR EXISTS (SELECT 1 FROM users WHERE avatar_name = ?)
+  `).get(filename, filename, filename, userId, userId, userId, filename)) return fail(res, 404, '媒体不存在或暂不可见。');
   const absolutePath = path.join(mediaDir, filename);
   if (!fs.existsSync(absolutePath)) return fail(res, 404, '媒体文件不存在。');
   res.set('Cache-Control', 'private, max-age=300');
@@ -731,7 +763,7 @@ app.get('/api/media/:filename', (req, res) => {
 app.use((_req, res) => fail(res, 404, '找不到这个接口。'));
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) {
-    const message = error.code === 'LIMIT_FILE_SIZE' ? '单个媒体文件不能超过 50 MB。' : '上传文件数量超出限制。';
+    const message = error.code === 'LIMIT_FILE_SIZE' ? (String(_req.originalUrl || '').includes('/api/me/avatar') ? '头像不能超过 5 MB。' : '单个媒体文件不能超过 50 MB。') : '上传文件数量超出限制。';
     return fail(res, 400, message);
   }
   if (error.message?.startsWith('文件格式') || error.message?.startsWith('配乐文件')) return fail(res, 400, error.message);
