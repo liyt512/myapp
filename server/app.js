@@ -748,12 +748,13 @@ app.get('/api/media/:filename', (req, res) => {
   let actual;
   try { actual = Buffer.from(signature, 'base64url'); } catch { return fail(res, 403, '媒体链接无效。'); }
   if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return fail(res, 403, '媒体链接无效。');
-  if (!db.prepare(`
-    SELECT 1 WHERE EXISTS (
-      SELECT 1 FROM posts p WHERE (p.media_name = ? OR p.audio_name = ? OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_name = ?))
-      AND (p.user_id = ? OR COALESCE(p.visibility, 'friends') = 'public' OR (COALESCE(p.visibility, 'friends') = 'friends' AND EXISTS (SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND ((f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?))))))
-    ) OR EXISTS (SELECT 1 FROM users WHERE avatar_name = ?)
-  `).get(filename, filename, filename, userId, userId, userId, filename)) return fail(res, 404, '媒体不存在或暂不可见。');
+  const inPost = db.prepare(`
+    SELECT 1 FROM posts p
+    WHERE (p.media_name = ? OR p.audio_name = ? OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.post_id = p.id AND pm.media_name = ?))
+    AND (p.user_id = ? OR COALESCE(p.visibility, 'friends') = 'public' OR (COALESCE(p.visibility, 'friends') = 'friends' AND EXISTS (SELECT 1 FROM friend_requests f WHERE f.status = 'accepted' AND ((f.from_user = p.user_id AND f.to_user = ?) OR (f.to_user = p.user_id AND f.from_user = ?)))))
+  `).get(filename, filename, filename, userId, userId, userId);
+  const isAvatar = db.prepare('SELECT 1 FROM users WHERE avatar_name = ?').get(filename);
+  if (!inPost && !isAvatar) return fail(res, 404, '媒体不存在或暂不可见。');
   const absolutePath = path.join(mediaDir, filename);
   if (!fs.existsSync(absolutePath)) return fail(res, 404, '媒体文件不存在。');
   res.set('Cache-Control', 'private, max-age=300');
