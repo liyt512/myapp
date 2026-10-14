@@ -18,6 +18,7 @@
   let currentFeed = 'friends';
   let currentCategory = '';
   let selectedMediaFiles = [];
+  let dmState = { conversations: [], currentId: null, currentOther: null, unread: 0, pollTimer: null, chatTimer: null, sending: false };
   const CATEGORY_LIST = ['日常', '美食', '旅行', '心情', '学习', '运动', '其他'];
   const VISIBILITY_LABEL = { public: '公开', friends: '仅好友', private: '仅自己' };
 
@@ -185,7 +186,11 @@
       '.lightbox-backdrop{position:fixed;inset:0;background:#000d;z-index:120;display:none;align-items:center;justify-content:center}.lightbox-backdrop.open{display:flex}.lightbox-inner{max-width:min(92vw,900px);max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:12px}.lightbox-inner img,.lightbox-inner video{max-width:100%;max-height:76vh;border-radius:12px;background:#000}.lightbox-bar{display:flex;gap:10px;align-items:center;color:#fff;font-size:12px}.lightbox-bar button{border:1px solid #fff;background:transparent;color:#fff;border-radius:18px;padding:7px 14px}',
       '.comment-row.reply{margin-left:24px;border-left:2px solid var(--line);padding-left:10px}.comment-reply-btn{border:0;background:none;color:#777;font-size:11px;margin-left:8px;cursor:pointer}.comment-reply-box{margin:6px 0 6px 24px;display:flex;gap:6px}.comment-reply-box input{flex:1;border:1px solid var(--line);border-radius:16px;padding:8px 11px;font-size:12px;outline:none}.comment-reply-box button{border:0;background:#171717;color:#fff;border-radius:16px;padding:8px 12px;font-size:11px}',
       '.composer-meta{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.composer-meta label{font-size:11px;color:#555;display:flex;align-items:center;gap:6px}.composer-meta select{border:1px solid var(--line);border-radius:10px;padding:7px 9px;font-size:11px;background:#fff;outline:none}',
-      '.preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.preview-grid img,.preview-grid video{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px}'
+      '.preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.preview-grid img,.preview-grid video{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px}',
+      '.dm-badge{display:none;position:absolute;top:2px;right:2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#d33;color:#fff;font-size:10px;line-height:16px;text-align:center}.dm-badge.show{display:block}.mobile-nav button{position:relative}',
+      '.dm-list{max-height:52vh;overflow:auto}.dm-item{display:flex;align-items:center;gap:11px;padding:12px 4px;border-bottom:1px solid var(--line);cursor:pointer;text-align:left;width:100%;background:none;border-left:0;border-right:0;border-top:0}.dm-item .avatar{width:44px;height:44px}.dm-item-copy{min-width:0;flex:1}.dm-item-name{font-weight:600;font-size:13px}.dm-item-last{font-size:12px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.dm-item-time{font-size:10px;color:#999;white-space:nowrap}.dm-item-unread{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#d33;color:#fff;font-size:11px;line-height:18px;text-align:center}',
+      '.dm-chat-backdrop{position:fixed;inset:0;background:#0008;z-index:50;display:none;align-items:center;justify-content:center;padding:18px}.dm-chat-backdrop.open{display:flex}.dm-chat{width:min(560px,100%);height:min(80vh,720px);background:#f6f6f4;border-radius:22px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 90px #0004}.dm-chat-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);background:#fff}.dm-chat-head h3{flex:1;margin:0;font-size:15px}.dm-chat-head button{border:1px solid var(--line);background:#fff;border-radius:16px;padding:7px 11px;font-size:11px}.dm-messages{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}.dm-bubble{max-width:78%;padding:9px 12px;border-radius:14px;font-size:13px;line-height:1.6;word-break:break-word;background:#fff;border:1px solid var(--line)}.dm-bubble.mine{align-self:flex-end;background:#171717;color:#fff;border-color:#171717}.dm-time{font-size:10px;color:#999;margin-top:2px}.dm-bubble.mine + .dm-time{align-self:flex-end}.dm-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);background:#fff}.dm-input-row input{flex:1;min-width:0;border:1px solid var(--line);border-radius:18px;padding:10px 13px;outline:none}.dm-input-row button{border:0;background:#171717;color:#fff;border-radius:18px;padding:10px 16px;font-size:12px}.dm-input-row button:disabled{opacity:.5}',
+      '.dm-empty{text-align:center;color:#777;font-size:12px;padding:32px 12px}.dm-btn{border:1px solid var(--line);background:#fff;border-radius:14px;padding:5px 9px;font-size:11px;white-space:nowrap}'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -419,6 +424,10 @@
     token = '';
     me = null;
     friendState = { friends: [], incoming: [], outgoing: [] };
+    dmState.conversations = []; dmState.unread = 0; dmState.currentId = null;
+    if (dmState.pollTimer) { clearInterval(dmState.pollTimer); dmState.pollTimer = null; }
+    if (dmState.chatTimer) { clearInterval(dmState.chatTimer); dmState.chatTimer = null; }
+    updateDmBadge();
     localStorage.removeItem(TOKEN_KEY);
     document.getElementById('accountDialog').classList.remove('open');
     closeMyProfile();
@@ -515,6 +524,15 @@
     time.textContent = formatTime(post.createdAt) + ' · @' + post.username;
     who.append(author, time);
     header.appendChild(who);
+    if (!post.owned) {
+      const dmBtn = document.createElement('button');
+      dmBtn.type = 'button';
+      dmBtn.className = 'dm-btn';
+      dmBtn.textContent = '私信';
+      dmBtn.setAttribute('aria-label', '私信 ' + post.displayName);
+      dmBtn.addEventListener('click', function () { startDmWith(post.userId); });
+      header.appendChild(dmBtn);
+    }
     if (post.owned) {
       const more = makeIconAction('trash', '删除', 'more icon-label');
       more.setAttribute('aria-label', '删除这条日常');
@@ -763,6 +781,170 @@
     if (layer) layer.classList.remove('open');
   }
 
+  // ---------- 一对一私信 (DM) ----------
+  function updateDmBadge() {
+    document.querySelectorAll('.dm-badge').forEach(function (badge) {
+      badge.textContent = dmState.unread > 99 ? '99+' : String(dmState.unread);
+      badge.classList.toggle('show', dmState.unread > 0);
+    });
+  }
+  async function refreshDmUnread() {
+    if (!me) return;
+    try {
+      const result = await request('/api/dm/unread');
+      dmState.unread = result.unread || 0;
+      updateDmBadge();
+    } catch (_) {}
+  }
+  function startDmPoll() {
+    if (dmState.pollTimer) return;
+    dmState.pollTimer = setInterval(refreshDmUnread, 30000);
+  }
+  function installDmUI() {
+    const listLayer = document.createElement('div');
+    listLayer.className = 'modal-backdrop';
+    listLayer.id = 'dmList';
+    listLayer.innerHTML = '<section class="modal friends-modal"><div class="modal-head"><div><div class="eyebrow">DIRECT MESSAGES</div><h2>消息</h2></div><button class="close" aria-label="关闭" onclick="closeDmList()">×</button></div><div id="dmListBody" class="dm-list"></div></section>';
+    listLayer.addEventListener('click', function (event) { if (event.target === listLayer) closeDmList(); });
+    document.body.appendChild(listLayer);
+    const chatLayer = document.createElement('div');
+    chatLayer.className = 'dm-chat-backdrop';
+    chatLayer.id = 'dmChat';
+    chatLayer.innerHTML = '<section class="dm-chat"><header class="dm-chat-head"><button type="button" id="dmChatBack">返回</button><h3 id="dmChatTitle">私信</h3><button type="button" id="dmChatClose">关闭</button></header><div id="dmMessages" class="dm-messages"></div><form id="dmForm" class="dm-input-row"><input id="dmInput" maxlength="2000" placeholder="写点什么…" autocomplete="off"><button id="dmSend" type="submit">发送</button></form></section>';
+    chatLayer.addEventListener('click', function (event) { if (event.target === chatLayer) closeDmChat(); });
+    document.body.appendChild(chatLayer);
+    document.getElementById('dmChatBack').addEventListener('click', function () { closeDmChat(); openDmList(); });
+    document.getElementById('dmChatClose').addEventListener('click', closeDmChat);
+    document.getElementById('dmForm').addEventListener('submit', function (event) { event.preventDefault(); sendDmMessage(); });
+  }
+  async function openDmList() {
+    if (!me) return showAuth();
+    document.getElementById('dmList').classList.add('open');
+    const body = document.getElementById('dmListBody');
+    body.textContent = '正在加载消息…';
+    try {
+      const result = await request('/api/dm/conversations');
+      dmState.conversations = result.conversations || [];
+      body.replaceChildren();
+      if (!dmState.conversations.length) {
+        const empty = document.createElement('div');
+        empty.className = 'dm-empty';
+        empty.textContent = '还没有私信，去好友列表点“私信”开始聊吧。';
+        body.appendChild(empty);
+        return;
+      }
+      dmState.conversations.forEach(function (conv) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'dm-item';
+        item.appendChild(avatarNode(conv.otherUser));
+        const copy = document.createElement('div');
+        copy.className = 'dm-item-copy';
+        const name = document.createElement('div');
+        name.className = 'dm-item-name';
+        name.textContent = conv.otherUser.displayName;
+        const last = document.createElement('div');
+        last.className = 'dm-item-last';
+        last.textContent = conv.lastMessage ? conv.lastMessage.text : '还没有消息';
+        copy.append(name, last);
+        const right = document.createElement('div');
+        const time = document.createElement('div');
+        time.className = 'dm-item-time';
+        time.textContent = conv.lastMessage ? formatTime(conv.lastMessage.createdAt) : '';
+        right.appendChild(time);
+        if (conv.unreadCount > 0) {
+          const unread = document.createElement('div');
+          unread.className = 'dm-item-unread';
+          unread.textContent = String(conv.unreadCount);
+          right.appendChild(unread);
+        }
+        item.append(copy, right);
+        item.addEventListener('click', function () { closeDmList(); openDmChat(conv.id, conv.otherUser); });
+        body.appendChild(item);
+      });
+    } catch (error) { body.textContent = error.message; }
+  }
+  function closeDmList() {
+    const layer = document.getElementById('dmList');
+    if (layer) layer.classList.remove('open');
+  }
+  async function startDmWith(otherUserId) {
+    if (!me) return showAuth();
+    if (Number(otherUserId) === me.id) { toast('不能和自己私信'); return; }
+    try {
+      const result = await request('/api/dm/conversations', { method: 'POST', body: { otherUserId: Number(otherUserId) } });
+      const conv = dmState.conversations.find(function (c) { return c.id === result.id; });
+      let other = conv ? conv.otherUser : null;
+      if (!other) {
+        const list = await request('/api/dm/conversations');
+        dmState.conversations = list.conversations || [];
+        const found = dmState.conversations.find(function (c) { return c.id === result.id; });
+        other = found ? found.otherUser : { id: Number(otherUserId), displayName: '好友', username: '' };
+      }
+      closeFriendHub();
+      openDmChat(result.id, other);
+    } catch (error) { toast(error.message); }
+  }
+  async function loadDmMessages(appendOnly) {
+    if (!dmState.currentId) return;
+    try {
+      const result = await request('/api/dm/conversations/' + dmState.currentId + '/messages');
+      const host = document.getElementById('dmMessages');
+      const prevCount = host.querySelectorAll('.dm-bubble').length;
+      if (appendOnly && result.messages.length === prevCount) return;
+      const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 80;
+      host.replaceChildren();
+      result.messages.forEach(function (msg) {
+        const bubble = document.createElement('div');
+        bubble.className = 'dm-bubble' + (msg.senderId === me.id ? ' mine' : '');
+        bubble.textContent = msg.text;
+        const time = document.createElement('div');
+        time.className = 'dm-time';
+        time.textContent = formatTime(msg.createdAt);
+        host.append(bubble, time);
+      });
+      if (atBottom || !appendOnly) host.scrollTop = host.scrollHeight;
+    } catch (error) { toast(error.message); }
+  }
+  async function openDmChat(conversationId, otherUser) {
+    if (!me) return showAuth();
+    dmState.currentId = Number(conversationId);
+    dmState.currentOther = otherUser;
+    document.getElementById('dmChatTitle').textContent = (otherUser && otherUser.displayName) || '私信';
+    document.getElementById('dmChat').classList.add('open');
+    await loadDmMessages(false);
+    try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
+    await refreshDmUnread();
+    if (dmState.chatTimer) clearInterval(dmState.chatTimer);
+    dmState.chatTimer = setInterval(function () { if (document.getElementById('dmChat').classList.contains('open')) { loadDmMessages(true); refreshDmUnread(); } }, 5000);
+  }
+  function closeDmChat() {
+    const layer = document.getElementById('dmChat');
+    if (layer) layer.classList.remove('open');
+    if (dmState.chatTimer) { clearInterval(dmState.chatTimer); dmState.chatTimer = null; }
+    dmState.currentId = null;
+    dmState.currentOther = null;
+    refreshDmUnread();
+    openDmListIfNeeded();
+  }
+  function openDmListIfNeeded() { /* 聊天关闭后不自动弹回列表，避免打断浏览 */ }
+  async function sendDmMessage() {
+    if (!dmState.currentId || dmState.sending) return;
+    const input = document.getElementById('dmInput');
+    const text = input.value.trim();
+    if (!text) return;
+    if (text.length > 2000) { toast('私信最多 2000 个字符'); return; }
+    dmState.sending = true;
+    const sendBtn = document.getElementById('dmSend');
+    sendBtn.disabled = true;
+    try {
+      await request('/api/dm/conversations/' + dmState.currentId + '/messages', { method: 'POST', body: { text: text } });
+      input.value = '';
+      await loadDmMessages(false);
+    } catch (error) { toast(error.message); }
+    finally { dmState.sending = false; sendBtn.disabled = false; }
+  }
+
   async function loadFeed() {
     const params = new URLSearchParams({ feed: currentFeed });
     if (currentCategory) params.set('category', currentCategory);
@@ -829,6 +1011,8 @@
     renderProfile();
     await loadFeed();
     renderSideFriends();
+    await refreshDmUnread();
+    startDmPoll();
   }
 
   function personCard(person, subtitle) {
@@ -927,6 +1111,11 @@
         const row = personCard(item.user, '@' + item.user.username + (item.type === 'incoming' ? ' · 等待你处理' : ''));
         const actions = document.createElement('div');
         actions.className = 'friend-card-actions';
+        {
+          const dm = makeAction('私信', 'follow');
+          dm.addEventListener('click', function () { startDmWith(item.user.id); });
+          actions.appendChild(dm);
+        }
         if (item.type === 'user') {
           const add = makeAction('添加好友', 'follow');
           add.addEventListener('click', function () { addFriend(item.user.id); });
@@ -996,6 +1185,12 @@
       }
       result.friends.slice(0, 4).forEach(function (person) {
         const row = personCard(person, '@' + person.username);
+        const dmBtn = document.createElement('button');
+        dmBtn.type = 'button';
+        dmBtn.className = 'dm-btn';
+        dmBtn.textContent = '私信';
+        dmBtn.addEventListener('click', function () { startDmWith(person.id); });
+        row.appendChild(dmBtn);
         const status = document.createElement('span');
         status.className = 'friend-state';
         status.textContent = '好友';
@@ -1359,6 +1554,13 @@
     installAuthDialog();
     installAccountButton();
     installProfilePage();
+    installDmUI();
+    var dmNavBtn = document.querySelector('.mobile-nav button[aria-label="消息"]');
+    if (dmNavBtn && !dmNavBtn.querySelector('.dm-badge')) {
+      var dmBadge = document.createElement('span');
+      dmBadge.className = 'dm-badge';
+      dmNavBtn.appendChild(dmBadge);
+    }
     const date = document.getElementById('today');
     if (date) date.textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
     document.getElementById('photoInput').addEventListener('change', function (event) { loadMedia(event.target); });
@@ -1377,7 +1579,7 @@
       if (event.key === 'Enter') { event.preventDefault(); searchOnlineMusic(true); }
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { closeComposer(); closeFriendHub(); closeDeleteDialog(); closeMyProfile(); }
+      if (event.key === 'Escape') { closeComposer(); closeFriendHub(); closeDeleteDialog(); closeMyProfile(); closeDmList(); closeDmChat(); }
     });
     const sideTitle = document.querySelector('#friends .side-title');
     if (sideTitle && sideTitle.firstChild) sideTitle.firstChild.textContent = '我的好友 ';
@@ -1401,6 +1603,10 @@
   window.closeComposer = closeComposer;
   window.openFriendHub = openFriendHub;
   window.closeFriendHub = closeFriendHub;
+  window.openDmList = openDmList;
+  window.closeDmList = closeDmList;
+  window.closeDmChat = closeDmChat;
+  window.startDmWith = startDmWith;
   window.openMyProfile = openMyProfile;
   window.closeMyProfile = closeMyProfile;
   window.setFriendTab = setFriendTab;
