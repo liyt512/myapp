@@ -17,6 +17,24 @@ public class MainActivity extends Activity {
     private WebView webView;
     private ValueCallback<Uri[]> fileCallback;
     private static final int FILE_PICKER = 4102;
+    private int lastStatusBarTop = 0;
+
+    // JS 桥接：把真实状态栏高度写入 CSS 变量 --status-bar-height / --sat。
+    // 首页 .topbar 是 position:sticky，sticky 会忽略 WebView 的 View padding，
+    // 仍贴到 0，和状态栏重合；而 Android WebView 的 env(safe-area-inset-top)
+    // 经常是 0，光靠 CSS 拿不到高度。所以必须由原生把高度灌进网页。
+    private void applyStatusBarHeight(int top) {
+        if (top <= 0) top = getStatusBarHeight();
+        if (top <= 0) return;
+        lastStatusBarTop = top;
+        if (webView == null) return;
+        try {
+            webView.evaluateJavascript(
+                "document.documentElement.style.setProperty('--status-bar-height','" + top + "px');"
+                + "document.documentElement.style.setProperty('--sat','" + top + "px');",
+                null);
+        } catch (Exception ignored) {}
+    }
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -51,13 +69,22 @@ public class MainActivity extends Activity {
             // 此时用资源里的 status_bar_height，避免顶栏与状态栏重合。
             if (top <= 0) top = getStatusBarHeight();
             view.setPadding(0, top, 0, bottom);
+            // 同步把高度灌进网页，供首页 sticky 顶栏的 top / padding 使用。
+            applyStatusBarHeight(top);
             return insets;
         });
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setMediaPlaybackRequiresUserGesture(true);
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                // 页面加载完后再灌一次：insets 可能在页面加载前就到，
+                // 那时 document 还没就绪，变量会丢；此处用已缓存的高度重灌。
+                applyStatusBarHeight(lastStatusBarTop > 0 ? lastStatusBarTop : getStatusBarHeight());
+            }
+        });
         webView.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
