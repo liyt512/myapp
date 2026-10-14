@@ -87,6 +87,35 @@
     return node;
   }
 
+  // 有真实头像显示 img，没有则回退 >_< 占位符。
+  function avatarNode(user, extraClass) {
+    if (user && user.avatarUrl) {
+      const img = document.createElement('img');
+      img.className = 'avatar' + (extraClass ? ' ' + extraClass : '');
+      img.src = mediaUrl(user.avatarUrl);
+      img.alt = user.displayName || '头像';
+      return img;
+    }
+    const node = avatarMark(user && user.displayName);
+    if (extraClass) node.classList.add(extraClass);
+    return node;
+  }
+
+  async function uploadAvatar(file) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast('请选择图片作为头像'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast('头像不能超过 5 MB'); return; }
+    const form = new FormData();
+    form.append('avatar', file, file.name);
+    try {
+      const result = await request('/api/me/avatar', { method: 'POST', body: form });
+      if (me) me.avatarUrl = result.avatarUrl;
+      renderProfile();
+      await loadMyProfile();
+      toast('头像已更换');
+    } catch (error) { toast(error.message); }
+  }
+
   function replaceSampleAvatars() {
     document.querySelectorAll('img.avatar').forEach(function (image) {
       image.replaceWith(avatarMark('留白账号'));
@@ -120,6 +149,9 @@
       '.friend-card-actions .follow{margin-left:0}',
       '.friend-state{font-size:10px;color:#777;margin-left:auto;white-space:nowrap}',
       '.comment-author{font-weight:600;color:#171717;margin-right:5px}',
+      '.comment-avatar{width:24px;height:24px;font-size:8px}',
+      '.comment-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.profile-avatar-btn{border:1px solid var(--line);background:#fff;border-radius:16px;padding:6px 10px;font-size:11px}',
       '.feed-empty{background:#fff;border:1px solid var(--line);border-radius:20px;text-align:center;color:#777;padding:42px 20px;font-size:13px;line-height:1.9}',
       '.feed-empty b{display:block;font-size:22px;color:#171717;margin-bottom:8px}',
       '.profile-backdrop{position:fixed;inset:0;background:#0008;z-index:40;display:none;align-items:center;justify-content:center;padding:18px}',
@@ -250,11 +282,14 @@
     layer.id = 'accountDialog';
     layer.innerHTML = '<section class="account-card" role="dialog" aria-modal="true"><div class="eyebrow">MY LITTLE SPACE</div>' +
       '<h2 id="accountName">我的账号</h2><p id="accountInfo"></p>' +
-      '<div class="account-actions"><button class="secondary" id="accountClose">返回</button><button id="logoutButton">退出账号</button></div></section>';
+      '<div class="account-actions"><button class="secondary" id="accountClose">返回</button><button id="logoutButton">退出账号</button></div>' +
+      '<div class="account-actions"><button class="secondary" id="changeAvatarButton">更换头像</button><input type="file" id="accountAvatarInput" accept="image/jpeg,image/png,image/webp,image/gif" hidden></div></section>';
     layer.addEventListener('click', function (event) { if (event.target === layer) layer.classList.remove('open'); });
     document.body.appendChild(layer);
     document.getElementById('accountClose').addEventListener('click', function () { layer.classList.remove('open'); });
     document.getElementById('logoutButton').addEventListener('click', logout);
+    document.getElementById('changeAvatarButton').addEventListener('click', function () { document.getElementById('accountAvatarInput').click(); });
+    document.getElementById('accountAvatarInput').addEventListener('change', function (event) { uploadAvatar(event.target.files && event.target.files[0]); event.target.value = ''; });
   }
 
   function installProfilePage() {
@@ -312,7 +347,7 @@
       card.className = 'profile-summary-card';
       const top = document.createElement('div');
       top.className = 'profile-summary-top';
-      const avatar = avatarMark(me.displayName);
+      const avatar = avatarNode(me);
       avatar.classList.add('profile-avatar');
       const identity = document.createElement('div');
       const name = document.createElement('div');
@@ -341,6 +376,17 @@
       });
       const actions = document.createElement('div');
       actions.className = 'profile-actions';
+      const changeAvatar = document.createElement('button');
+      changeAvatar.type = 'button';
+      changeAvatar.className = 'profile-avatar-btn';
+      changeAvatar.textContent = '更换头像';
+      const avatarInput = document.createElement('input');
+      avatarInput.type = 'file';
+      avatarInput.accept = 'image/jpeg,image/png,image/webp,image/gif';
+      avatarInput.hidden = true;
+      avatarInput.addEventListener('change', function (event) { uploadAvatar(event.target.files && event.target.files[0]); event.target.value = ''; });
+      changeAvatar.addEventListener('click', function () { avatarInput.click(); });
+      actions.append(changeAvatar, avatarInput);
       const publish = document.createElement('button');
       publish.type = 'button';
       publish.className = 'profile-publish';
@@ -381,7 +427,28 @@
     showAuth('已退出账号。');
   }
 
+  function refreshStaticAvatars() {
+    if (!me) return;
+    const host = document.querySelector('.me-card .avatar');
+    if (host && me.avatarUrl) {
+      const img = document.createElement('img');
+      img.className = 'avatar';
+      img.src = mediaUrl(me.avatarUrl);
+      img.alt = me.displayName || '我的头像';
+      host.replaceWith(img);
+    }
+    const composerAvatar = document.querySelector('.composer-top .avatar');
+    if (composerAvatar && me.avatarUrl) {
+      const img = document.createElement('img');
+      img.className = 'avatar';
+      img.src = mediaUrl(me.avatarUrl);
+      img.alt = '';
+      composerAvatar.replaceWith(img);
+    }
+  }
+
   function renderProfile() {
+    refreshStaticAvatars();
     const name = document.querySelector('.me-name');
     const handle = document.querySelector('.me-handle');
     if (name) name.textContent = me ? me.displayName : '还没有登录';
@@ -438,7 +505,7 @@
 
     const header = document.createElement('div');
     header.className = 'post-head';
-    header.appendChild(avatarMark(post.displayName));
+    header.appendChild(avatarNode(post));
     const who = document.createElement('div');
     const author = document.createElement('div');
     author.className = 'post-author';
@@ -589,7 +656,7 @@
       input.disabled = true;
       try {
         const created = await request('/api/posts/' + post.id + '/comments', { method: 'POST', body: { text: value } });
-        list.appendChild(makeComment({ id: created.id, displayName: me.displayName, username: me.username, text: value, parentId: null }, post.id, list));
+        list.appendChild(makeComment({ id: created.id, displayName: me.displayName, username: me.username, avatarUrl: me.avatarUrl, text: value, parentId: null }, post.id, list));
         input.value = '';
         commentsLoaded = true;
       } catch (error) { toast(error.message); }
@@ -602,6 +669,7 @@
     const row = document.createElement('div');
     const isReply = !!comment.parentId;
     row.className = 'comment-row' + (isReply ? ' reply' : '');
+    row.appendChild(avatarNode(comment, 'comment-avatar'));
     const author = document.createElement('span');
     author.className = 'comment-author';
     author.textContent = comment.displayName + '：';
@@ -633,7 +701,7 @@
           const created = await request('/api/posts/' + postId + '/comments', { method: 'POST', body: { text: value, parentId: comment.id } });
           const topId = comment.parentId ? comment.parentId : comment.id;
           const topName = comment.parentId ? (comment.parentDisplayName || comment.parentUsername || comment.displayName) : comment.displayName;
-          const newRow = makeComment({ id: created.id, displayName: me.displayName, username: me.username, text: value, parentId: topId, parentDisplayName: topName }, postId, listNode);
+          const newRow = makeComment({ id: created.id, displayName: me.displayName, username: me.username, avatarUrl: me.avatarUrl, text: value, parentId: topId, parentDisplayName: topName }, postId, listNode);
           listNode.appendChild(newRow);
           box.remove();
         } catch (error) { toast(error.message); }
@@ -766,7 +834,7 @@
   function personCard(person, subtitle) {
     const row = document.createElement('div');
     row.className = 'friend hub-friend';
-    row.appendChild(avatarMark(person.displayName));
+    row.appendChild(avatarNode(person));
     const copy = document.createElement('div');
     copy.className = 'friend-copy';
     const name = document.createElement('div');
@@ -1132,13 +1200,15 @@
 
   function loadMedia(input) {
     const files = Array.from(input.files || []).slice(0, 9);
-    if (!files.length) return;
+    if (!files.length) { toast('未选择到文件，请重试'); return; }
+    if (files.some(function (f) { return f.type === 'image/heic' || f.type === 'image/heif'; })) toast('HEIC 照片可能无法预览，但仍可上传，服务器会原样保存。');
     const oversize = files.find(function (f) { return f.size > 50 * 1024 * 1024; });
     if (oversize) { toast('照片或视频不能超过 50 MB'); input.value = ''; return; }
     const merged = selectedMediaFiles.concat(files).slice(0, 9);
     if (merged.length >= 9 && selectedMediaFiles.length + files.length > 9) toast('最多一次传 9 个媒体');
     selectedMediaFiles = merged;
     const preview = document.getElementById('preview');
+    if (!preview) { toast('预览区异常，请重试'); return; }
     preview.querySelectorAll('img,video').forEach(function (old) {
       if (old.src && old.src.startsWith('blob:')) URL.revokeObjectURL(old.src);
     });
@@ -1175,6 +1245,7 @@
 
   // 发布前压缩图片：最长边最大 1600px，JPEG 质量 0.82。视频/音频不压缩。
   // 任何一步失败都回退到原图上传，绝不让压缩导致发布失败。GIF 不压缩（保留动图）。
+  // HEIC/HEIF 在部分 WebView 里 createImageBitmap 解码失败，走 catch 回退原图上传，不会因此发不出去。
   async function compressImageFile(file) {
     try {
       if (!file || !file.type?.startsWith('image/') || file.type === 'image/gif') return file;
