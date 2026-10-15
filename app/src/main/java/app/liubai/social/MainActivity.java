@@ -23,15 +23,20 @@ public class MainActivity extends Activity {
     // 首页 .topbar 是 position:sticky，sticky 会忽略 WebView 的 View padding，
     // 仍贴到 0，和状态栏重合；而 Android WebView 的 env(safe-area-inset-top)
     // 经常是 0，光靠 CSS 拿不到高度。所以必须由原生把高度灌进网页。
-    private void applyStatusBarHeight(int top) {
-        if (top <= 0) top = getStatusBarHeight();
-        if (top <= 0) return;
-        lastStatusBarTop = top;
+    private void applyStatusBarHeight(int topPx) {
+        if (topPx <= 0) topPx = getStatusBarHeight();
+        if (topPx <= 0) return;
+        lastStatusBarTop = topPx;
         if (webView == null) return;
+        // 关键修复: getStatusBarHeight / WindowInsets 给的是物理像素 (px),
+        // WebView 里 CSS px = 物理 px / density。直接把物理 px 当 CSS px,
+        // 在 2x/3x 屏上会把顶栏顶出 2-3 倍的大白边。
+        float density = getResources().getDisplayMetrics().density;
+        int topCss = Math.round(topPx / Math.max(density, 1f));
         try {
             webView.evaluateJavascript(
-                "document.documentElement.style.setProperty('--status-bar-height','" + top + "px');"
-                + "document.documentElement.style.setProperty('--sat','" + top + "px');",
+                "document.documentElement.style.setProperty('--status-bar-height','" + topCss + "px');"
+                + "document.documentElement.style.setProperty('--sat','" + topCss + "px');",
                 null);
         } catch (Exception ignored) {}
     }
