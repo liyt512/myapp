@@ -19,6 +19,9 @@
   let currentCategory = '';
   let selectedMediaFiles = [];
   let dmState = { conversations: [], currentId: null, currentOther: null, unread: 0, pollTimer: null, chatTimer: null, sending: false };
+  // 全屏页面视图：profile（他人/自己主页）、friends（好友）、dm-list（消息列表）、dm-chat（私信聊天）。
+  // 用整页视图替代弹窗：页面内容渲染进 #pageView，主 feed 区 .layout 隐藏，底部导航保持可见。
+  let pageViewState = { name: null, userId: null };
   const CATEGORY_LIST = ['日常', '美食', '旅行', '心情', '学习', '运动', '其他'];
   const VISIBILITY_LABEL = { public: '公开', friends: '仅好友', private: '仅自己' };
 
@@ -89,16 +92,33 @@
   }
 
   // 有真实头像显示 img，没有则回退 >_< 占位符。
+  // 点头像进他人主页（全屏页面，不是弹窗）。stopPropagation 避免触发外层卡片的点击。
   function avatarNode(user, extraClass) {
+    let node;
     if (user && user.avatarUrl) {
       const img = document.createElement('img');
       img.className = 'avatar' + (extraClass ? ' ' + extraClass : '');
       img.src = mediaUrl(user.avatarUrl);
       img.alt = user.displayName || '头像';
-      return img;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      node = img;
+    } else {
+      node = avatarMark(user && user.displayName);
+      if (extraClass) node.classList.add(extraClass);
     }
-    const node = avatarMark(user && user.displayName);
-    if (extraClass) node.classList.add(extraClass);
+    // 动态对象用 userId，好友/自己用 id。
+    const profileId = user && (user.userId || user.id);
+    if (profileId) {
+      node.classList.add('avatar-click');
+      node.setAttribute('role', 'button');
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('aria-label', '查看 ' + (user.displayName || '好友') + ' 的主页');
+      node.addEventListener('click', function (event) { event.stopPropagation(); openUserProfile(profileId); });
+      node.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); openUserProfile(profileId); }
+      });
+    }
     return node;
   }
 
@@ -191,6 +211,48 @@
     document.querySelectorAll('.post').forEach(function (post) { post.remove(); });
   }
 
+  // ---------- 全屏页面视图（替代弹窗） ----------
+  function pageViewEl() { return document.getElementById('pageView'); }
+  function setNavActive(label) {
+    document.querySelectorAll('.mobile-nav button').forEach(function (button) {
+      button.classList.toggle('active', button.getAttribute('aria-label') === label);
+    });
+  }
+  function showPageView(name) {
+    const view = pageViewEl();
+    if (!view) return;
+    pageViewState.name = name;
+    const layout = document.querySelector('.layout');
+    if (layout) layout.style.display = 'none';
+    view.hidden = false;
+    view.classList.add('open');
+    view.replaceChildren();
+    window.scrollTo({ top: 0 });
+    setNavActive(name === 'profile' ? '我的' : name === 'friends' ? '好友' : name === 'dm-list' || name === 'dm-chat' ? '消息' : '日常');
+  }
+  function showFeed() {
+    const view = pageViewEl();
+    pageViewState = { name: null, userId: null };
+    if (view) { view.hidden = true; view.classList.remove('open'); view.replaceChildren(); }
+    const layout = document.querySelector('.layout');
+    if (layout) layout.style.display = '';
+    window.scrollTo({ top: 0 });
+    setNavActive('日常');
+  }
+  function pageHead(title, backLabel, onBack) {
+    const head = document.createElement('div');
+    head.className = 'page-head';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'page-back';
+    back.textContent = backLabel || '返回';
+    back.addEventListener('click', onBack);
+    const heading = document.createElement('h2');
+    heading.textContent = title;
+    head.append(back, heading);
+    return head;
+  }
+
   function installStyle() {
     const style = document.createElement('style');
     style.textContent = [
@@ -244,7 +306,7 @@
       '.post-media{max-height:480px}',
       '.top-right .account-button{border:1px solid #171717;border-radius:50%;width:35px;height:35px;background:#171717;color:white;font-size:10px;font-weight:700;letter-spacing:-1px}',
       '.top-right .account-button svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8}',
-      '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:17px 15px}.post-foot{gap:14px}}',
+      '@media(max-width:700px){.auth-card,.account-card{padding:21px}.composer-tools{margin-left:0;justify-content:space-between}.post{padding:14px 15px}.post-foot{gap:14px}}',
       '@media(max-width:600px){.profile-backdrop{padding:0}.profile-page{width:100%;height:100dvh;max-height:100dvh;border:0;border-radius:0;padding:calc(18px + env(safe-area-inset-top)) 14px calc(18px + env(safe-area-inset-bottom))}.profile-page-head{top:0;margin-top:calc(-18px - env(safe-area-inset-top));margin-left:-14px;margin-right:-14px;padding:calc(14px + env(safe-area-inset-top)) 14px 14px}.profile-summary-card{padding:17px}.profile-avatar{width:52px;height:52px}}',
       '.feed-tabs{display:flex;gap:8px;margin:0 0 14px}.feed-tabs button{border:1px solid var(--line);background:#fff;border-radius:18px;padding:8px 16px;font-size:12px;color:#777}.feed-tabs button.active{background:#171717;color:#fff;border-color:#171717}',
       '.category-chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 16px}.category-chips button{border:1px solid var(--line);background:#fff;border-radius:14px;padding:6px 11px;font-size:11px;color:#777}.category-chips button.active{background:#171717;color:#fff;border-color:#171717}',
@@ -257,7 +319,23 @@
       '.dm-badge{display:none;position:absolute;top:2px;right:2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#d33;color:#fff;font-size:10px;line-height:16px;text-align:center}.dm-badge.show{display:block}.mobile-nav button{position:relative}',
       '.dm-list{max-height:52vh;overflow:auto}.dm-item{display:flex;align-items:center;gap:11px;padding:12px 4px;border-bottom:1px solid var(--line);cursor:pointer;text-align:left;width:100%;background:none;border-left:0;border-right:0;border-top:0}.dm-item .avatar{width:44px;height:44px}.dm-item-copy{min-width:0;flex:1}.dm-item-name{font-weight:600;font-size:13px}.dm-item-last{font-size:12px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.dm-item-time{font-size:10px;color:#999;white-space:nowrap}.dm-item-unread{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#d33;color:#fff;font-size:11px;line-height:18px;text-align:center}',
       '.dm-chat-backdrop{position:fixed;inset:0;background:#0008;z-index:50;display:none;align-items:center;justify-content:center;padding:18px}.dm-chat-backdrop.open{display:flex}.dm-chat{width:min(560px,100%);height:min(80vh,720px);background:#f6f6f4;border-radius:22px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 90px #0004}.dm-chat-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);background:#fff}.dm-chat-head h3{flex:1;margin:0;font-size:15px}.dm-chat-head button{border:1px solid var(--line);background:#fff;border-radius:16px;padding:7px 11px;font-size:11px}.dm-messages{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}.dm-bubble{max-width:78%;padding:9px 12px;border-radius:14px;font-size:13px;line-height:1.6;word-break:break-word;background:#fff;border:1px solid var(--line)}.dm-bubble.mine{align-self:flex-end;background:#171717;color:#fff;border-color:#171717}.dm-time{font-size:10px;color:#999;margin-top:2px}.dm-bubble.mine + .dm-time{align-self:flex-end}.dm-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);background:#fff}.dm-input-row input{flex:1;min-width:0;border:1px solid var(--line);border-radius:18px;padding:10px 13px;outline:none}.dm-input-row button{border:0;background:#171717;color:#fff;border-radius:18px;padding:10px 16px;font-size:12px}.dm-input-row button:disabled{opacity:.5}',
-      '.dm-empty{text-align:center;color:#777;font-size:12px;padding:32px 12px}.dm-btn{border:1px solid var(--line);background:#fff;border-radius:14px;padding:5px 9px;font-size:11px;white-space:nowrap}'
+      '.dm-empty{text-align:center;color:#777;font-size:12px;padding:32px 12px}.dm-btn{border:1px solid var(--line);background:#fff;border-radius:14px;padding:5px 9px;font-size:11px;white-space:nowrap}',
+      '.page-view{display:none;max-width:740px;margin:0 auto;padding:16px 16px 90px}.page-view.open{display:block}',
+      '.page-head{display:flex;align-items:center;gap:12px;background:#f6f6f4;padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:14px}',
+      '.page-head h2{flex:1;margin:0;font-size:16px}',
+      '.page-back{border:1px solid var(--line);background:#fff;border-radius:18px;padding:8px 12px;font-size:12px}',
+      '.page-view .profile-page{width:100%;height:auto;max-height:none;background:transparent;border:0;border-radius:0;overflow:visible;padding:0;box-shadow:none}',
+      '.page-view .profile-page-head{display:none}',
+      '.dm-page-list{overflow:visible}',
+      '.dm-page-chat{display:flex;flex-direction:column;min-height:calc(100dvh - 180px)}',
+      '.dm-page-messages{flex:1;overflow:auto;padding:14px 0;display:flex;flex-direction:column;gap:8px}',
+      '.dm-page-input{display:flex;gap:8px;padding:12px 0 calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:#f6f6f4;position:sticky;bottom:calc(60px + env(safe-area-inset-bottom))}',
+      '.dm-page-input input{flex:1;min-width:0;border:1px solid var(--line);border-radius:18px;padding:10px 13px;outline:none;background:#fff}',
+      '.dm-page-input button{border:0;background:#171717;color:#fff;border-radius:18px;padding:10px 16px;font-size:12px}',
+      '.dm-page-input button:disabled{opacity:.5}',
+      '.friend-page-list{overflow:visible;max-height:none}',
+      '.post-author-btn{border:0;background:none;padding:0;text-align:left;cursor:pointer;font:inherit;font-weight:600}',
+      '.avatar-click{cursor:pointer}'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -365,16 +443,7 @@
   }
 
   function installProfilePage() {
-    const layer = document.createElement('div');
-    layer.className = 'profile-backdrop';
-    layer.id = 'profilePage';
-    layer.innerHTML = '<section class="profile-page" role="dialog" aria-modal="true" aria-labelledby="profileTitle">' +
-      '<header class="profile-page-head"><button type="button" id="profileBack">返回</button><h2 id="profileTitle">个人主页</h2><button type="button" id="profileAccount">账号设置</button></header>' +
-      '<div id="myProfileSummary"></div><h3 class="profile-post-title">我的日常</h3><div class="profile-posts" id="myProfilePosts"></div></section>';
-    layer.addEventListener('click', function (event) { if (event.target === layer) closeMyProfile(); });
-    document.body.appendChild(layer);
-    document.getElementById('profileBack').addEventListener('click', closeMyProfile);
-    document.getElementById('profileAccount').addEventListener('click', openAccount);
+    // 主页是全屏页面（#pageView），不再建弹窗层。只接线侧边“我的”卡片。
     const card = document.querySelector('.me-card');
     if (card) {
       card.setAttribute('role', 'button');
@@ -387,31 +456,44 @@
   }
 
   let profileLoadId = 0;
-  async function openMyProfile() {
+  function openMyProfile() {
     if (!me) return showAuth();
-    document.getElementById('profilePage').classList.add('open');
-    document.querySelectorAll('.mobile-nav button').forEach(function (button) { button.classList.toggle('active', button.getAttribute('aria-label') === '我的'); });
-    await loadMyProfile();
+    return openUserProfile(me.id);
   }
 
   function closeMyProfile() {
-    const layer = document.getElementById('profilePage');
-    if (layer) layer.classList.remove('open');
-    document.querySelectorAll('.mobile-nav button').forEach(function (button) { button.classList.toggle('active', button.getAttribute('aria-label') === '日常'); });
+    if (pageViewState.name === 'profile') showFeed();
   }
 
-  async function loadMyProfile() {
-    if (!me) return;
+  // 他人主页（全屏页面，不是弹窗）：头像、昵称、简介、动态数/好友数/获赞数 + 该用户动态列表。
+  async function openUserProfile(userId) {
+    if (!me) return showAuth();
+    const targetId = Number(userId);
+    if (!Number.isSafeInteger(targetId) || targetId <= 0) return;
+    showPageView('profile');
+    pageViewState.userId = targetId;
+    const view = pageViewEl();
     const loadId = ++profileLoadId;
-    const summary = document.getElementById('myProfileSummary');
-    const postsHost = document.getElementById('myProfilePosts');
+    view.appendChild(pageHead('个人主页', '返回', showFeed));
+    const summary = document.createElement('div');
     summary.textContent = '正在加载个人主页…';
-    postsHost.replaceChildren();
+    view.appendChild(summary);
+    const postsTitle = document.createElement('h3');
+    postsTitle.className = 'profile-post-title';
+    postsTitle.textContent = '日常';
+    view.appendChild(postsTitle);
+    const postsHost = document.createElement('div');
+    postsHost.className = 'profile-posts';
+    view.appendChild(postsHost);
     try {
-      const values = await Promise.all([request('/api/me'), request('/api/posts')]);
-      if (loadId !== profileLoadId || !document.getElementById('profilePage').classList.contains('open')) return;
-      me = values[0];
-      const posts = values[1].posts.filter(function (post) { return post.owned; });
+      const values = await Promise.all([
+        request('/api/users/' + targetId),
+        request('/api/posts?userId=' + targetId),
+      ]);
+      if (loadId !== profileLoadId || pageViewState.name !== 'profile' || pageViewState.userId !== targetId) return;
+      const user = values[0];
+      const posts = values[1].posts || [];
+      if (user.isSelf) me = { ...me, ...user };
       renderProfile();
       summary.replaceChildren();
 
@@ -419,24 +501,33 @@
       card.className = 'profile-summary-card';
       const top = document.createElement('div');
       top.className = 'profile-summary-top';
-      const avatar = avatarNode(me);
+      const avatar = avatarNode(user);
       avatar.classList.add('profile-avatar');
       const identity = document.createElement('div');
       const name = document.createElement('div');
       name.className = 'profile-display-name';
-      name.textContent = me.displayName || '留白用户';
+      name.textContent = user.displayName || '留白用户';
       const handle = document.createElement('div');
       handle.className = 'profile-handle';
-      handle.textContent = '@' + me.username;
+      handle.textContent = '@' + user.username;
       const joined = document.createElement('div');
       joined.className = 'profile-joined';
-      const created = new Date(me.createdAt);
+      const created = new Date(user.createdAt);
       joined.textContent = Number.isNaN(created.getTime()) ? '留白好友' : new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(created) + ' 加入留白';
       identity.append(name, handle, joined);
       top.append(avatar, identity);
+      if (user.bio) {
+        const bio = document.createElement('div');
+        bio.className = 'profile-handle';
+        bio.style.marginTop = '10px';
+        bio.style.color = '#555';
+        bio.style.whiteSpace = 'pre-wrap';
+        bio.textContent = user.bio;
+        identity.appendChild(bio);
+      }
       const stats = document.createElement('div');
       stats.className = 'profile-stats';
-      [[me.postCount || 0, '日常'], [me.friendCount || 0, '好友'], [me.likeCount || 0, '获赞']].forEach(function (item) {
+      [[user.postCount || 0, '日常'], [user.friendCount || 0, '好友'], [user.likeCount || 0, '获赞']].forEach(function (item) {
         const stat = document.createElement('div');
         stat.className = 'profile-stat';
         const count = document.createElement('b');
@@ -448,36 +539,68 @@
       });
       const actions = document.createElement('div');
       actions.className = 'profile-actions';
-      const changeAvatar = document.createElement('button');
-      changeAvatar.type = 'button';
-      changeAvatar.className = 'profile-avatar-btn';
-      changeAvatar.textContent = '更换头像';
-      const avatarInput = document.createElement('input');
-      avatarInput.type = 'file';
-      avatarInput.accept = 'image/jpeg,image/png,image/webp,image/gif';
-      avatarInput.hidden = true;
-      avatarInput.addEventListener('change', function (event) { uploadAvatar(event.target.files && event.target.files[0]); event.target.value = ''; });
-      changeAvatar.addEventListener('click', function () { avatarInput.click(); });
-      actions.append(changeAvatar, avatarInput);
-      const publish = document.createElement('button');
-      publish.type = 'button';
-      publish.className = 'profile-publish';
-      publish.textContent = '发布日常';
-      publish.addEventListener('click', function () { closeMyProfile(); openComposer(); });
-      actions.appendChild(publish);
+      if (user.isSelf) {
+        const changeAvatar = document.createElement('button');
+        changeAvatar.type = 'button';
+        changeAvatar.className = 'profile-avatar-btn';
+        changeAvatar.textContent = '更换头像';
+        const avatarInput = document.createElement('input');
+        avatarInput.type = 'file';
+        avatarInput.accept = 'image/jpeg,image/png,image/webp,image/gif';
+        avatarInput.hidden = true;
+        avatarInput.addEventListener('change', function (event) { uploadAvatar(event.target.files && event.target.files[0]); event.target.value = ''; });
+        changeAvatar.addEventListener('click', function () { avatarInput.click(); });
+        actions.append(changeAvatar, avatarInput);
+        const account = document.createElement('button');
+        account.type = 'button';
+        account.className = 'profile-avatar-btn';
+        account.textContent = '账号设置';
+        account.addEventListener('click', openAccount);
+        actions.appendChild(account);
+        const publish = document.createElement('button');
+        publish.type = 'button';
+        publish.className = 'profile-publish';
+        publish.textContent = '发布日常';
+        publish.addEventListener('click', function () { closeMyProfile(); openComposer(); });
+        actions.appendChild(publish);
+      } else {
+        const dm = document.createElement('button');
+        dm.type = 'button';
+        dm.className = 'profile-publish';
+        dm.textContent = '私信';
+        dm.addEventListener('click', function () { startDmWith(targetId); });
+        actions.appendChild(dm);
+        if (!user.isFriend) {
+          const add = document.createElement('button');
+          add.type = 'button';
+          add.className = 'profile-avatar-btn';
+          add.textContent = '添加好友';
+          add.addEventListener('click', function () { addFriend(targetId); });
+          actions.appendChild(add);
+        } else {
+          const tag = document.createElement('span');
+          tag.className = 'friend-state';
+          tag.textContent = '已是好友';
+          actions.appendChild(tag);
+        }
+      }
       card.append(top, stats, actions);
       summary.appendChild(card);
 
       if (!posts.length) {
         const empty = document.createElement('div');
         empty.className = 'feed-empty';
-        empty.innerHTML = '<b>&gt;_&lt;</b><span>还没有发布日常，分享一个此刻吧。</span>';
+        empty.innerHTML = '<b>&gt;_&lt;</b><span>还没有发布日常。</span>';
         postsHost.appendChild(empty);
       } else posts.forEach(function (post) { postsHost.appendChild(makePost(post)); });
     } catch (error) {
       if (loadId !== profileLoadId) return;
       summary.textContent = error.message || '个人主页暂时无法加载。';
     }
+  }
+
+  function loadMyProfile() {
+    return openUserProfile(me && me.id);
   }
 
   function openAccount() {
@@ -498,6 +621,7 @@
     localStorage.removeItem(TOKEN_KEY);
     document.getElementById('accountDialog').classList.remove('open');
     closeMyProfile();
+    showFeed();
     renderEmptyFeed('登录后查看好友的日常');
     renderProfile();
     showAuth('已退出账号。');
@@ -552,6 +676,13 @@
     return value ? apiBase + value : '';
   }
 
+  // 动态流里用小图：Unsplash 示例图把 w=1100 换成 w=800；服务器本地图暂无缩略图接口，保持原图（靠懒加载省流量）。
+  function feedThumbUrl(value) {
+    const url = mediaUrl(value);
+    if (!url) return url;
+    return url.replace(/([?&]w=)\d+/, '$1800');
+  }
+
   function renderEmptyFeed(message) {
     const host = document.getElementById('posts');
     host.replaceChildren();
@@ -583,9 +714,12 @@
     header.className = 'post-head';
     header.appendChild(avatarNode(post));
     const who = document.createElement('div');
-    const author = document.createElement('div');
-    author.className = 'post-author';
+    const author = document.createElement('button');
+    author.type = 'button';
+    author.className = 'post-author post-author-btn';
     author.textContent = post.displayName;
+    author.setAttribute('aria-label', '查看 ' + post.displayName + ' 的主页');
+    author.addEventListener('click', function (event) { event.stopPropagation(); openUserProfile(post.userId); });
     const time = document.createElement('div');
     time.className = 'post-time';
     time.textContent = formatTime(post.createdAt) + ' · @' + post.username;
@@ -647,9 +781,13 @@
         } else {
           media = document.createElement('img');
           media.alt = '日常照片';
+          // 动态图片懒加载：滑到才加载，解码不阻塞主线程；低清占位背景在 CSS 里（.grid-item 背景色）。
+          // 示例图（Unsplash）用 w=800 小图，点开灯箱再看原图；服务器本地图片暂无缩略图接口，用原图 + 懒加载。
+          media.loading = 'lazy';
+          media.decoding = 'async';
         }
         media.className = 'grid-item';
-        media.src = mediaUrl(item.url);
+        media.src = feedThumbUrl(item.url);
         media.addEventListener('click', function () { openLightbox(mediaItems, index); });
         grid.appendChild(media);
       });
@@ -838,6 +976,8 @@
     } else {
       node = document.createElement('img');
       node.alt = '日常照片';
+      node.loading = 'eager';
+      node.decoding = 'async';
     }
     node.src = mediaUrl(item.url);
     stage.appendChild(node);
@@ -868,27 +1008,21 @@
     dmState.pollTimer = setInterval(refreshDmUnread, 30000);
   }
   function installDmUI() {
-    const listLayer = document.createElement('div');
-    listLayer.className = 'modal-backdrop';
-    listLayer.id = 'dmList';
-    listLayer.innerHTML = '<section class="modal friends-modal"><div class="modal-head"><div><div class="eyebrow">DIRECT MESSAGES</div><h2>消息</h2></div><button class="close" aria-label="关闭" onclick="closeDmList()">×</button></div><div id="dmListBody" class="dm-list"></div></section>';
-    listLayer.addEventListener('click', function (event) { if (event.target === listLayer) closeDmList(); });
-    document.body.appendChild(listLayer);
-    const chatLayer = document.createElement('div');
-    chatLayer.className = 'dm-chat-backdrop';
-    chatLayer.id = 'dmChat';
-    chatLayer.innerHTML = '<section class="dm-chat"><header class="dm-chat-head"><button type="button" id="dmChatBack">返回</button><h3 id="dmChatTitle">私信</h3><button type="button" id="dmChatClose">关闭</button></header><div id="dmMessages" class="dm-messages"></div><form id="dmForm" class="dm-input-row"><input id="dmInput" maxlength="2000" placeholder="写点什么…" autocomplete="off"><button id="dmSend" type="submit">发送</button></form></section>';
-    chatLayer.addEventListener('click', function (event) { if (event.target === chatLayer) closeDmChat(); });
-    document.body.appendChild(chatLayer);
-    document.getElementById('dmChatBack').addEventListener('click', function () { closeDmChat(); openDmList(); });
-    document.getElementById('dmChatClose').addEventListener('click', closeDmChat);
-    document.getElementById('dmForm').addEventListener('submit', function (event) { event.preventDefault(); sendDmMessage(); });
+    // 私信是全屏页面（#pageView），不再建弹窗层。
   }
   async function openDmList() {
     if (!me) return showAuth();
-    document.getElementById('dmList').classList.add('open');
-    const body = document.getElementById('dmListBody');
+    if (dmState.chatTimer) { clearInterval(dmState.chatTimer); dmState.chatTimer = null; }
+    dmState.currentId = null;
+    dmState.currentOther = null;
+    showPageView('dm-list');
+    const view = pageViewEl();
+    view.appendChild(pageHead('消息', '返回', showFeed));
+    const body = document.createElement('div');
+    body.id = 'dmListBody';
+    body.className = 'dm-page-list';
     body.textContent = '正在加载消息…';
+    view.appendChild(body);
     try {
       const result = await request('/api/dm/conversations');
       dmState.conversations = result.conversations || [];
@@ -926,14 +1060,13 @@
           right.appendChild(unread);
         }
         item.append(copy, right);
-        item.addEventListener('click', function () { closeDmList(); openDmChat(conv.id, conv.otherUser); });
+        item.addEventListener('click', function () { openDmChat(conv.id, conv.otherUser); });
         body.appendChild(item);
       });
     } catch (error) { body.textContent = error.message; }
   }
   function closeDmList() {
-    const layer = document.getElementById('dmList');
-    if (layer) layer.classList.remove('open');
+    if (pageViewState.name === 'dm-list') showFeed();
   }
   async function startDmWith(otherUserId) {
     if (!me) return showAuth();
@@ -977,24 +1110,45 @@
     if (!me) return showAuth();
     dmState.currentId = Number(conversationId);
     dmState.currentOther = otherUser;
-    document.getElementById('dmChatTitle').textContent = (otherUser && otherUser.displayName) || '私信';
-    document.getElementById('dmChat').classList.add('open');
+    showPageView('dm-chat');
+    const view = pageViewEl();
+    const chat = document.createElement('div');
+    chat.className = 'dm-page-chat';
+    chat.appendChild(pageHead((otherUser && otherUser.displayName) || '私信', '返回', openDmList));
+    const messages = document.createElement('div');
+    messages.id = 'dmMessages';
+    messages.className = 'dm-messages dm-page-messages';
+    chat.appendChild(messages);
+    const form = document.createElement('form');
+    form.id = 'dmForm';
+    form.className = 'dm-page-input';
+    const input = document.createElement('input');
+    input.id = 'dmInput';
+    input.maxLength = 2000;
+    input.placeholder = '写点什么…';
+    input.autocomplete = 'off';
+    const send = document.createElement('button');
+    send.id = 'dmSend';
+    send.type = 'submit';
+    send.textContent = '发送';
+    form.append(input, send);
+    form.addEventListener('submit', function (event) { event.preventDefault(); sendDmMessage(); });
+    chat.appendChild(form);
+    view.appendChild(chat);
     await loadDmMessages(false);
     try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
     await refreshDmUnread();
     if (dmState.chatTimer) clearInterval(dmState.chatTimer);
-    dmState.chatTimer = setInterval(function () { if (document.getElementById('dmChat').classList.contains('open')) { loadDmMessages(true); refreshDmUnread(); } }, 5000);
+    dmState.chatTimer = setInterval(function () { if (pageViewState.name === 'dm-chat') { loadDmMessages(true); refreshDmUnread(); } }, 5000);
   }
   function closeDmChat() {
-    const layer = document.getElementById('dmChat');
-    if (layer) layer.classList.remove('open');
+    if (pageViewState.name !== 'dm-chat') return;
     if (dmState.chatTimer) { clearInterval(dmState.chatTimer); dmState.chatTimer = null; }
     dmState.currentId = null;
     dmState.currentOther = null;
     refreshDmUnread();
-    openDmListIfNeeded();
+    openDmList();
   }
-  function openDmListIfNeeded() { /* 聊天关闭后不自动弹回列表，避免打断浏览 */ }
   async function sendDmMessage() {
     if (!dmState.currentId || dmState.sending) return;
     const input = document.getElementById('dmInput');
@@ -1047,7 +1201,6 @@
       button.addEventListener('click', function () {
         currentFeed = item[0];
         loadFeed();
-        if (document.getElementById('profilePage').classList.contains('open')) return;
       });
       tabs.appendChild(button);
     });
@@ -1131,27 +1284,54 @@
   function addFriend(id) { sendFriendRequest(id).catch(function (error) { toast(error.message); }); }
   function setFriendTab(tab) {
     friendTab = tab;
-    document.getElementById('friendSearch').value = '';
+    const search = document.getElementById('friendSearch');
+    if (search) search.value = '';
     renderFriendHub();
   }
 
   function openFriendHub(tab) {
     if (!me) return showAuth();
     friendTab = tab || 'recommend';
-    document.getElementById('friendSearch').value = '';
-    document.getElementById('friendHub').classList.add('open');
+    showPageView('friends');
+    const view = pageViewEl();
+    view.appendChild(pageHead('好友', '返回', showFeed));
+    const search = document.createElement('input');
+    search.className = 'friend-search';
+    search.id = 'friendSearch';
+    search.type = 'search';
+    search.placeholder = '搜索好友或昵称';
+    search.addEventListener('input', renderFriendHub);
+    view.appendChild(search);
+    const tabs = document.createElement('div');
+    tabs.className = 'friend-tabs';
+    [['recommend', '推荐'], ['friends', '我的好友'], ['requests', '申请记录']].forEach(function (item) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.tab = item[0];
+      button.textContent = item[1];
+      button.classList.toggle('active', friendTab === item[0]);
+      button.addEventListener('click', function () { setFriendTab(item[0]); });
+      tabs.appendChild(button);
+    });
+    view.appendChild(tabs);
+    const list = document.createElement('div');
+    list.id = 'friendHubList';
+    list.className = 'friend-hub-list friend-page-list';
+    view.appendChild(list);
     renderFriendHub();
   }
-  function closeFriendHub() { document.getElementById('friendHub').classList.remove('open'); }
+  function closeFriendHub() { if (pageViewState.name === 'friends') showFeed(); }
 
   async function renderFriendHub() {
     const thisLoad = ++hubLoadId;
     const host = document.getElementById('friendHubList');
+    const searchInput = document.getElementById('friendSearch');
+    if (!host || !searchInput) return;
     host.replaceChildren();
     document.querySelectorAll('.friend-tabs button').forEach(function (button) {
       button.classList.toggle('active', button.dataset.tab === friendTab);
     });
-    const query = document.getElementById('friendSearch').value.trim();
+    const query = searchInput.value.trim();
     try {
       await refreshFriendState();
       let rows = [];
@@ -1604,7 +1784,7 @@
       closeDeleteDialog();
       await loadFeed();
       await loadProfileCounts();
-      if (document.getElementById('profilePage').classList.contains('open')) await loadMyProfile();
+      if (pageViewState.name === 'profile' && pageViewState.userId) await openUserProfile(pageViewState.userId);
       toast('日常已从所有设备删除');
     } catch (error) { toast(error.message); }
   }
@@ -1676,6 +1856,8 @@
   window.startDmWith = startDmWith;
   window.openMyProfile = openMyProfile;
   window.closeMyProfile = closeMyProfile;
+  window.openUserProfile = openUserProfile;
+  window.showFeed = showFeed;
   window.setFriendTab = setFriendTab;
   window.renderFriendHub = renderFriendHub;
   window.publishPost = publishPost;
