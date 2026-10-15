@@ -305,13 +305,13 @@ function limitAuthAttempts(req, res, next) {
   const key = req.ip || req.socket.remoteAddress || 'unknown';
   const current = Date.now();
   let entry = authAttempts.get(key);
-  if (!entry || entry.resetAt <= current) entry = { count: 0, resetAt: current + 15 * 60 * 1000 };
+  if (!entry || entry.resetAt <= current) entry = { count: 0, resetAt: current + 5 * 60 * 1000 };
   entry.count += 1;
   authAttempts.set(key, entry);
   if (authAttempts.size > 5000) {
     for (const [ip, item] of authAttempts) if (item.resetAt <= current) authAttempts.delete(ip);
   }
-  if (entry.count > 12) return res.status(429).json({ error: '尝试次数太多，请 15 分钟后再试。' });
+  if (entry.count > 30) return res.status(429).json({ error: '尝试次数太多，请 5 分钟后再试。' });
   next();
 }
 
