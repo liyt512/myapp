@@ -106,6 +106,73 @@
     if (!file) return;
     if (!file.type.startsWith('image/')) { toast('请选择图片作为头像'); return; }
     if (file.size > 5 * 1024 * 1024) { toast('头像不能超过 5 MB'); return; }
+    // 先裁剪放大再上传，不直接传原图
+    openAvatarCrop(file);
+    return;
+  }
+
+  // 头像裁剪：圆形预览 + 拖动平移 + 滑块放大，裁成 512x512 再上传
+  function openAvatarCrop(file) {
+    const old = document.getElementById('avatarCropBackdrop');
+    if (old) old.remove();
+    const url = URL.createObjectURL(file);
+    const backdrop = document.createElement('div');
+    backdrop.id = 'avatarCropBackdrop';
+    backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:60;display:flex;align-items:center;justify-content:center;padding:20px';
+    backdrop.innerHTML = '<div style="background:#fff;width:min(360px,100%);border-radius:18px;padding:18px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><b>裁剪头像</b><button id="avatarCropClose" style="border:0;background:#f1f1ee;width:28px;height:28px;border-radius:50%;font-size:16px">×</button></div>' +
+      '<div id="avatarCropBox" style="position:relative;width:280px;height:280px;margin:0 auto;overflow:hidden;background:#111;border-radius:12px;touch-action:none;cursor:grab">' +
+      '<img id="avatarCropImg" src="' + url + '" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(1);transform-origin:center;max-width:none;user-select:none;-webkit-user-drag:none">' +
+      '<div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle at center, transparent 108px, rgba(0,0,0,.55) 109px)"></div>' +
+      '<div style="position:absolute;left:50%;top:50%;width:216px;height:216px;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:50%;pointer-events:none;box-sizing:border-box"></div></div>' +
+      '<div style="display:flex;align-items:center;gap:10px;margin:14px 4px 0;font-size:12px;color:#777"><span>缩小</span><input id="avatarCropZoom" type="range" min="1" max="3" step="0.05" value="1" style="flex:1"><span>放大</span></div>' +
+      '<p style="font-size:11px;color:#999;margin:8px 4px 0">拖动图片调整位置，滑动放大，圆内就是头像</p>' +
+      '<div style="display:flex;gap:10px;margin-top:14px"><button id="avatarCropCancel" style="flex:1;border:1px solid #ddd;background:#fff;border-radius:16px;padding:10px">取消</button><button id="avatarCropConfirm" style="flex:1;border:0;background:#171717;color:#fff;border-radius:16px;padding:10px">确定上传</button></div></div>';
+    document.body.appendChild(backdrop);
+    const img = backdrop.querySelector('#avatarCropImg');
+    const box = backdrop.querySelector('#avatarCropBox');
+    const zoomInput = backdrop.querySelector('#avatarCropZoom');
+    let scale = 1, dx = 0, dy = 0, startX = 0, startY = 0, startDx = 0, startDy = 0, dragging = false;
+    let baseW = 0, baseH = 0;
+    function apply() { img.style.transform = 'translate(calc(-50% + ' + dx + 'px), calc(-50% + ' + dy + 'px)) scale(' + scale + ')'; }
+    img.onload = function () {
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      const fit = Math.max(280 / iw, 280 / ih);
+      baseW = iw * fit; baseH = ih * fit;
+      img.style.width = baseW + 'px'; img.style.height = baseH + 'px';
+      apply();
+    };
+    zoomInput.addEventListener('input', function () { scale = parseFloat(zoomInput.value); apply(); });
+    box.addEventListener('pointerdown', function (e) { dragging = true; startX = e.clientX; startY = e.clientY; startDx = dx; startDy = dy; box.setPointerCapture(e.pointerId); });
+    box.addEventListener('pointermove', function (e) { if (!dragging) return; dx = startDx + (e.clientX - startX); dy = startDy + (e.clientY - startY); const max = 140; dx = Math.max(-max, Math.min(max, dx)); dy = Math.max(-max, Math.min(max, dy)); apply(); });
+    box.addEventListener('pointerup', function () { dragging = false; });
+    function close() { URL.revokeObjectURL(url); backdrop.remove(); }
+    backdrop.querySelector('#avatarCropClose').onclick = close;
+    backdrop.querySelector('#avatarCropCancel').onclick = close;
+    backdrop.addEventListener('click', function (e) { if (e.target === backdrop) close(); });
+    backdrop.querySelector('#avatarCropConfirm').onclick = async function () {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512; canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        // 圆内区域对应原图：box 280px 对应 512px，圆直径 216px
+        const s = 512 / 280;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(256, 256, 256, 0, Math.PI * 2); ctx.clip();
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 512, 512);
+        const drawW = baseW * scale * s, drawH = baseH * scale * s;
+        ctx.drawImage(img, 256 - drawW / 2 + dx * s, 256 - drawH / 2 + dy * s, drawW, drawH);
+        ctx.restore();
+        const blob = await new Promise(function (res) { canvas.toBlob(res, 'image/jpeg', 0.92); });
+        if (!blob) { toast('裁剪失败，请重试'); return; }
+        const cropped = new File([blob], 'avatar.jpg', { type: 'image/jpeg' });
+        close();
+        await uploadAvatarCropped(cropped);
+      } catch (err) { toast('裁剪失败，请重试'); }
+    };
+  }
+
+  async function uploadAvatarCropped(file) {
     const form = new FormData();
     form.append('avatar', file, file.name);
     try {
