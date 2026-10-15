@@ -68,7 +68,10 @@ public class MainActivity extends Activity {
             // 兜底：部分机型/系统上 DecorView 已消费 insets，top 会是 0。
             // 此时用资源里的 status_bar_height，避免顶栏与状态栏重合。
             if (top <= 0) top = getStatusBarHeight();
-            view.setPadding(0, top, 0, bottom);
+            // 顶部不设 WebView padding，顶部由 CSS 的 --status-bar-height 处理。
+            // 若这里也设 top，会和 CSS 的 padding-top / height 双重叠加，顶栏上方多出一大块白边。
+            // 底部保留 bottom，避免系统导航栏盖住底部导航。
+            view.setPadding(0, 0, 0, bottom);
             // 同步把高度灌进网页，供首页 sticky 顶栏的 top / padding 使用。
             applyStatusBarHeight(top);
             return insets;
