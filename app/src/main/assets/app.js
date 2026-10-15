@@ -316,6 +316,7 @@
       '.comment-row.reply{margin-left:24px;border-left:2px solid var(--line);padding-left:10px}.comment-reply-btn{border:0;background:none;color:#777;font-size:11px;margin-left:8px;cursor:pointer}.comment-reply-box{margin:6px 0 6px 24px;display:flex;gap:6px}.comment-reply-box input{flex:1;border:1px solid var(--line);border-radius:16px;padding:8px 11px;font-size:12px;outline:none}.comment-reply-box button{border:0;background:#171717;color:#fff;border-radius:16px;padding:8px 12px;font-size:11px}',
       '.composer-meta{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}.composer-meta label{font-size:11px;color:#555;display:flex;align-items:center;gap:6px}.composer-meta select{border:1px solid var(--line);border-radius:10px;padding:7px 9px;font-size:11px;background:#fff;outline:none}',
       '.preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.preview-grid img,.preview-grid video{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px}',
+      '.preview-item{position:relative}.preview-item img,.preview-item video{display:block}.preview-remove{position:absolute;top:4px;right:4px;z-index:2;width:24px;height:24px;border:0;border-radius:50%;background:#000b;color:#fff;font-size:15px;line-height:1;cursor:pointer}.preview-clear-row{grid-column:1/-1;text-align:right}.preview-clear{border:1px solid var(--line);background:#fff;border-radius:14px;padding:6px 11px;font-size:11px;color:#555}',
       '.dm-badge{display:none;position:absolute;top:2px;right:2px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:#d33;color:#fff;font-size:10px;line-height:16px;text-align:center}.dm-badge.show{display:block}.mobile-nav button{position:relative}',
       '.dm-list{max-height:52vh;overflow:auto}.dm-item{display:flex;align-items:center;gap:11px;padding:12px 4px;border-bottom:1px solid var(--line);cursor:pointer;text-align:left;width:100%;background:none;border-left:0;border-right:0;border-top:0}.dm-item .avatar{width:44px;height:44px}.dm-item-copy{min-width:0;flex:1}.dm-item-name{font-weight:600;font-size:13px}.dm-item-last{font-size:12px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}.dm-item-time{font-size:10px;color:#999;white-space:nowrap}.dm-item-unread{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#d33;color:#fff;font-size:11px;line-height:18px;text-align:center}',
       '.dm-chat-backdrop{position:fixed;inset:0;background:#0008;z-index:50;display:none;align-items:center;justify-content:center;padding:18px}.dm-chat-backdrop.open{display:flex}.dm-chat{width:min(560px,100%);height:min(80vh,720px);background:#f6f6f4;border-radius:22px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 90px #0004}.dm-chat-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);background:#fff}.dm-chat-head h3{flex:1;margin:0;font-size:15px}.dm-chat-head button{border:1px solid var(--line);background:#fff;border-radius:16px;padding:7px 11px;font-size:11px}.dm-messages{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:8px}.dm-bubble{max-width:78%;padding:9px 12px;border-radius:14px;font-size:13px;line-height:1.6;word-break:break-word;background:#fff;border:1px solid var(--line)}.dm-bubble.mine{align-self:flex-end;background:#171717;color:#fff;border-color:#171717}.dm-time{font-size:10px;color:#999;margin-top:2px}.dm-bubble.mine + .dm-time{align-self:flex-end}.dm-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);background:#fff}.dm-input-row input{flex:1;min-width:0;border:1px solid var(--line);border-radius:18px;padding:10px 13px;outline:none}.dm-input-row button{border:0;background:#171717;color:#fff;border-radius:18px;padding:10px 16px;font-size:12px}.dm-input-row button:disabled{opacity:.5}',
@@ -1143,6 +1144,18 @@
     form.addEventListener('submit', function (event) { event.preventDefault(); sendDmMessage(); });
     chat.appendChild(form);
     view.appendChild(chat);
+    // 键盘弹起时把输入框顶上去，消息滚到底（visualViewport 兜底，配合 Manifest adjustResize）。
+    if (window.visualViewport) {
+      var _vvHandler = function () {
+        var kb = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+        chat.style.paddingBottom = kb ? kb + 'px' : '';
+        var msgs = document.getElementById('dmMessages');
+        if (msgs && kb) msgs.scrollTop = msgs.scrollHeight;
+      };
+      window.visualViewport.addEventListener('resize', _vvHandler);
+      chat._vvHandler = _vvHandler;
+    }
+    input.addEventListener('focus', function () { setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 300); });
     await loadDmMessages(false);
     try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
     await refreshDmUnread();
@@ -1648,6 +1661,73 @@
     } finally { button.disabled = false; }
   }
 
+  // 发动态预览：每张图/每个视频右上角都有 ×，点一下只删这一张，不用重选全部。
+  function revokePreviewUrls() {
+    const preview = document.getElementById('preview');
+    if (!preview) return;
+    preview.querySelectorAll('img,video').forEach(function (old) {
+      if (old.src && old.src.startsWith('blob:')) URL.revokeObjectURL(old.src);
+    });
+  }
+  function renderMediaPreview() {
+    const preview = document.getElementById('preview');
+    if (!preview) { toast('预览区异常，请重试'); return; }
+    revokePreviewUrls();
+    preview.replaceChildren();
+    if (!selectedMediaFiles.length) {
+      preview.style.display = 'none';
+      preview.classList.remove('preview-grid');
+      return;
+    }
+    preview.style.display = 'block';
+    preview.classList.add('preview-grid');
+    selectedMediaFiles.forEach(function (file, index) {
+      const item = document.createElement('div');
+      item.className = 'preview-item';
+      let element;
+      const isVideo = file.type.startsWith('video/');
+      if (isVideo) { element = document.createElement('video'); element.controls = true; }
+      else { element = document.createElement('img'); element.alt = '上传预览'; }
+      element.src = URL.createObjectURL(file);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'preview-remove';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', '删除第' + (index + 1) + '个' + (isVideo ? '视频' : '图片'));
+      remove.addEventListener('click', function (event) { event.stopPropagation(); removeMediaAt(index); });
+      item.append(element, remove);
+      preview.appendChild(item);
+    });
+    const clearRow = document.createElement('div');
+    clearRow.className = 'preview-clear-row';
+    const clearAll = document.createElement('button');
+    clearAll.type = 'button';
+    clearAll.className = 'preview-clear';
+    clearAll.textContent = '全部清除';
+    clearAll.addEventListener('click', function () { clearAllMedia(); });
+    clearRow.appendChild(clearAll);
+    preview.appendChild(clearRow);
+  }
+  function removeMediaAt(index) {
+    if (index < 0 || index >= selectedMediaFiles.length) return;
+    selectedMediaFiles.splice(index, 1);
+    const photoInput = document.getElementById('photoInput');
+    const videoInput = document.getElementById('videoInput');
+    if (photoInput) photoInput.value = '';
+    if (videoInput) videoInput.value = '';
+    renderMediaPreview();
+    toast('已删除这张，剩 ' + selectedMediaFiles.length + ' 张');
+  }
+  function clearAllMedia() {
+    selectedMediaFiles = [];
+    const photoInput = document.getElementById('photoInput');
+    const videoInput = document.getElementById('videoInput');
+    if (photoInput) photoInput.value = '';
+    if (videoInput) videoInput.value = '';
+    renderMediaPreview();
+    toast('已清空已选媒体');
+  }
+
   function loadMedia(input) {
     const files = Array.from(input.files || []).slice(0, 9);
     if (!files.length) { toast('未选择到文件，请重试'); return; }
@@ -1657,21 +1737,9 @@
     const merged = selectedMediaFiles.concat(files).slice(0, 9);
     if (merged.length >= 9 && selectedMediaFiles.length + files.length > 9) toast('最多一次传 9 个媒体');
     selectedMediaFiles = merged;
-    const preview = document.getElementById('preview');
-    if (!preview) { toast('预览区异常，请重试'); return; }
-    preview.querySelectorAll('img,video').forEach(function (old) {
-      if (old.src && old.src.startsWith('blob:')) URL.revokeObjectURL(old.src);
-    });
-    preview.style.display = 'block';
-    preview.replaceChildren();
-    preview.classList.add('preview-grid');
-    selectedMediaFiles.forEach(function (file) {
-      let element;
-      if (file.type.startsWith('video/')) { element = document.createElement('video'); element.controls = true; }
-      else { element = document.createElement('img'); element.alt = '上传预览'; }
-      element.src = URL.createObjectURL(file);
-      preview.appendChild(element);
-    });
+    // 清空 input，下次选同一张图也能再次触发 change。
+    input.value = '';
+    renderMediaPreview();
   }
 
   function loadAudio(input) {
@@ -1752,8 +1820,10 @@
       await request('/api/posts', { method: 'POST', body: form });
       caption.value = '';
       selectedMediaFiles = [];
+      revokePreviewUrls();
       document.getElementById('preview').replaceChildren();
       document.getElementById('preview').style.display = 'none';
+      document.getElementById('preview').classList.remove('preview-grid');
       document.getElementById('photoInput').value = '';
       document.getElementById('videoInput').value = '';
       document.getElementById('audioInput').value = '';
