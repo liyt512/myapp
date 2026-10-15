@@ -92,6 +92,7 @@ db.exec(`
 `);
 const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
 if (!userColumns.has('avatar_name')) db.exec('ALTER TABLE users ADD COLUMN avatar_name TEXT');
+if (!userColumns.has('bio')) db.exec("ALTER TABLE users ADD COLUMN bio TEXT DEFAULT ''");
 const commentColumns = new Set(db.prepare('PRAGMA table_info(comments)').all().map((column) => column.name));
 if (!commentColumns.has('parent_id')) db.exec('ALTER TABLE comments ADD COLUMN parent_id INTEGER REFERENCES comments(id) ON DELETE CASCADE');
 // 一对一私信：user1_id < user2_id 保证一对一唯一。
@@ -418,6 +419,26 @@ app.get('/api/users', requireAuth, (req, res) => {
   res.json({ users: users.map((u) => publicUser(u, req.user.id)) });
 });
 
+// 他人主页：头像、昵称、简介、动态数/好友数/获赞数。bio 字段若为空返回 ''。
+app.get('/api/users/:id', requireAuth, (req, res) => {
+  const targetId = Number(req.params.id);
+  if (!Number.isSafeInteger(targetId) || targetId <= 0) return fail(res, 400, '找不到这个账号。');
+  const row = db.prepare('SELECT id, username, display_name, avatar_name, bio, created_at FROM users WHERE id = ?').get(targetId);
+  if (!row) return fail(res, 404, '找不到这个账号。');
+  const friends = db.prepare("SELECT COUNT(*) AS n FROM friend_requests WHERE status = 'accepted' AND (from_user = ? OR to_user = ?)").get(targetId, targetId).n;
+  const posts = db.prepare('SELECT COUNT(*) AS n FROM posts WHERE user_id = ?').get(targetId).n;
+  const likes = db.prepare('SELECT COUNT(*) AS n FROM likes l JOIN posts p ON p.id = l.post_id WHERE p.user_id = ?').get(targetId).n;
+  res.json({
+    ...publicUser(row, req.user.id),
+    bio: row.bio || '',
+    friendCount: friends,
+    postCount: posts,
+    likeCount: likes,
+    isSelf: targetId === req.user.id,
+    isFriend: targetId === req.user.id ? true : isFriendOf(req.user.id, targetId),
+  });
+});
+
 app.get('/api/friends', requireAuth, (req, res) => {
   const id = req.user.id;
   const friends = db.prepare(`
@@ -643,8 +664,24 @@ app.get('/api/posts', requireAuth, (req, res) => {
   const feed = String(req.query.feed || 'friends').trim().toLowerCase() === 'square' ? 'square' : 'friends';
   const categoryParam = String(req.query.category || '').trim().slice(0, 12);
   const categoryFilter = CATEGORIES.includes(categoryParam) ? categoryParam : null;
+  // 他人主页：?userId= 只看该用户的动态，并按可见性过滤（自己看全部，好友看公开+仅好友，陌生人只看公开）。
+  const profileUserId = Number(req.query.userId);
   let where;
   let params;
+  if (Number.isSafeInteger(profileUserId) && profileUserId > 0) {
+    // 注意：SQL 第一个 ? 是 SELECT 里的“是否点赞”（当前用户），params[0] 必须是 viewer 的 userId。
+    if (profileUserId === userId) {
+      where = 'p.user_id = ?';
+      params = [userId, profileUserId];
+    } else if (isFriendOf(userId, profileUserId)) {
+      where = "p.user_id = ? AND COALESCE(p.visibility, 'friends') IN ('public', 'friends')";
+      params = [userId, profileUserId];
+    } else {
+      where = "p.user_id = ? AND COALESCE(p.visibility, 'friends') = 'public'";
+      params = [userId, profileUserId];
+    }
+    if (categoryFilter) { where += " AND COALESCE(p.category, '日常') = ?"; params.push(categoryFilter); }
+  } else
   if (feed === 'square') {
     where = "COALESCE(p.visibility, 'friends') = 'public'";
     params = [userId];
