@@ -327,8 +327,8 @@
       '.page-view .profile-page{width:100%;height:auto;max-height:none;background:transparent;border:0;border-radius:0;overflow:visible;padding:0;box-shadow:none}',
       '.page-view .profile-page-head{display:none}',
       '.dm-page-list{overflow:visible}',
-      '.dm-page-chat{display:flex;flex-direction:column;min-height:calc(100dvh - 180px)}',
-      '.dm-page-messages{flex:1;overflow:auto;padding:14px 0;display:flex;flex-direction:column;gap:8px}',
+      '.dm-page-chat{display:flex;flex-direction:column;height:calc(100dvh - 180px);overflow:hidden}',
+      '.dm-page-messages{flex:1;overflow-y:auto;padding:14px 0;display:flex;flex-direction:column;gap:8px}',
       '.dm-page-input{display:flex;gap:8px;padding:12px 0 calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:#f6f6f4;position:sticky;bottom:calc(60px + env(safe-area-inset-bottom))}',
       '.dm-page-input input{flex:1;min-width:0;border:1px solid var(--line);border-radius:18px;padding:10px 13px;outline:none;background:#fff}',
       '.dm-page-input button{border:0;background:#171717;color:#fff;border-radius:18px;padding:10px 16px;font-size:12px}',
@@ -1090,9 +1090,11 @@
     try {
       const result = await request('/api/dm/conversations/' + dmState.currentId + '/messages');
       const host = document.getElementById('dmMessages');
+      if (!host) return;
       const prevCount = host.querySelectorAll('.dm-bubble').length;
       if (appendOnly && result.messages.length === prevCount) return;
-      const atBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 80;
+      const wasAtBottom = host.scrollHeight - host.scrollTop - host.clientHeight < 120;
+      const hasNewFromOther = appendOnly && result.messages.slice(prevCount).some(function (m) { return m.senderId !== me.id; });
       host.replaceChildren();
       result.messages.forEach(function (msg) {
         const bubble = document.createElement('div');
@@ -1103,7 +1105,13 @@
         time.textContent = formatTime(msg.createdAt);
         host.append(bubble, time);
       });
-      if (atBottom || !appendOnly) host.scrollTop = host.scrollHeight;
+      // 打开时一定到底；有对方新消息时也到底；自己在上面翻历史时不抢滚动。
+      if (!appendOnly || wasAtBottom || hasNewFromOther) {
+        requestAnimationFrame(function () { host.scrollTop = host.scrollHeight; });
+      }
+      if (hasNewFromOther) {
+        try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
+      }
     } catch (error) { toast(error.message); }
   }
   async function openDmChat(conversationId, otherUser) {
