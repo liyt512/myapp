@@ -1106,12 +1106,9 @@
         time.textContent = formatTime(msg.createdAt);
         host.append(bubble, time);
       });
-      // 打开时一定到底；有对方新消息时也到底；自己在上面翻历史时不抢滚动。
+      // 打开时一定到底：消息已全部渲染完，直接滚一次到底。
       if (!appendOnly || wasAtBottom || hasNewFromOther) {
-        var _scrollBottom = function () { host.scrollTop = host.scrollHeight; };
-        requestAnimationFrame(_scrollBottom);
-        setTimeout(_scrollBottom, 50);
-        setTimeout(_scrollBottom, 200);
+        host.scrollTop = host.scrollHeight;
       }
       if (hasNewFromOther) {
         try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
@@ -1156,7 +1153,6 @@
     // 原生已用 IME 高度改 WebView 高度，这里只在聚焦时滚到底，不要再改 chat 高度，否则会和原生重复顶起、留一大段空白。
     input.addEventListener('focus', function () { setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 300); });
     await loadDmMessages(false);
-    setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 400);
     try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
     await refreshDmUnread();
     if (dmState.chatTimer) clearInterval(dmState.chatTimer);
@@ -1184,7 +1180,6 @@
       await request('/api/dm/conversations/' + dmState.currentId + '/messages', { method: 'POST', body: { text: text } });
       input.value = '';
       await loadDmMessages(false);
-    setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 400);
     } catch (error) { toast(error.message); }
     finally { dmState.sending = false; sendBtn.disabled = false; }
   }
