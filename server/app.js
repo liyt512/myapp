@@ -419,6 +419,22 @@ app.get('/api/users', requireAuth, (req, res) => {
   res.json({ users: users.map((u) => publicUser(u, req.user.id)) });
 });
 
+// 推荐好友：不用搜，自动返回除自己、已是好友、已发/已收申请之外的用户。
+app.get('/api/users/recommend', requireAuth, (req, res) => {
+  const users = db.prepare(`
+    SELECT id, username, display_name, avatar_name, created_at FROM users
+    WHERE id != ? AND id NOT IN (
+      SELECT CASE WHEN from_user = ? THEN to_user ELSE from_user END FROM friend_requests WHERE status = 'accepted' AND (from_user = ? OR to_user = ?)
+    ) AND id NOT IN (
+      SELECT to_user FROM friend_requests WHERE status = 'pending' AND from_user = ?
+    ) AND id NOT IN (
+      SELECT from_user FROM friend_requests WHERE status = 'pending' AND to_user = ?
+    )
+    ORDER BY created_at DESC LIMIT 30
+  `).all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, req.user.id);
+  res.json({ users: users.map((u) => publicUser(u, req.user.id)) });
+});
+
 // 他人主页：头像、昵称、简介、动态数/好友数/获赞数。bio 字段若为空返回 ''。
 app.get('/api/users/:id', requireAuth, (req, res) => {
   const targetId = Number(req.params.id);
