@@ -1184,8 +1184,10 @@
     finally { dmState.sending = false; sendBtn.disabled = false; }
   }
 
+  var feedOffset = 0;
   async function loadFeed() {
-    const params = new URLSearchParams({ feed: currentFeed });
+    feedOffset = 0;
+    const params = new URLSearchParams({ feed: currentFeed, offset: 0 });
     if (currentCategory) params.set('category', currentCategory);
     const result = await request('/api/posts?' + params.toString());
     const host = document.getElementById('posts');
@@ -1197,6 +1199,24 @@
       return;
     }
     result.posts.forEach(function (post) { host.appendChild(makePost(post)); });
+    feedOffset = result.posts.length;
+    if (result.posts.length === 20) {
+      const more = document.createElement('button');
+      more.className = 'load-more';
+      more.textContent = '加载更多';
+      more.style.cssText = 'display:block;margin:16px auto;padding:10px 24px;border:1px solid var(--line);background:#fff;border-radius:20px;';
+      more.addEventListener('click', async function () {
+        more.disabled = true; more.textContent = '加载中…';
+        const p2 = new URLSearchParams({ feed: currentFeed, offset: feedOffset });
+        if (currentCategory) p2.set('category', currentCategory);
+        const r2 = await request('/api/posts?' + p2.toString());
+        more.remove();
+        r2.posts.forEach(function (post) { host.appendChild(makePost(post)); });
+        feedOffset += r2.posts.length;
+        if (r2.posts.length === 20) { host.appendChild(more); more.disabled = false; more.textContent = '加载更多'; }
+      });
+      host.appendChild(more);
+    }
   }
   function feedEmptyNode(message) {
     const empty = document.createElement('div');
