@@ -1898,7 +1898,7 @@
     installStyle();
     replaceSampleAvatars();
     installAuthDialog();
-    installAccountButton();
+    //installAccountButton();
     installProfilePage();
     installDmUI();
     var dmNavBtn = document.querySelector('.mobile-nav button[aria-label="消息"]');
