@@ -1361,6 +1361,10 @@
           const incoming = new Set(friendState.incoming.map(function (item) { return item.user.id; }));
           rows = result.users.filter(function (person) { return !ids.has(person.id) && !outgoing.has(person.id) && !incoming.has(person.id); })
             .map(function (person) { return { type: 'user', user: person }; });
+        } else {
+          // 不搜也自动推荐：服务器已排除自己、好友、已申请的人
+          const result = await request('/api/users/recommend');
+          rows = result.users.map(function (person) { return { type: 'user', user: person }; });
         }
       } else if (friendTab === 'friends') {
         rows = friendState.friends.filter(function (person) {
@@ -1410,7 +1414,7 @@
         const face = document.createElement('span');
         face.textContent = '>_<';
         const copy = document.createElement('p');
-        if (friendTab === 'recommend') copy.textContent = query.length < 2 ? '输入朋友的账号名或昵称，至少 2 个字即可搜索。' : '没有找到账号。请确认朋友把留白账号名告诉你。';
+        if (friendTab === 'recommend') copy.textContent = query.length >= 2 ? '没有找到账号。请确认朋友把留白账号名告诉你。' : '还没有可以推荐的人，等新朋友注册就会出现在这里。';
         else if (friendTab === 'friends') copy.textContent = '好友会显示在这里。去“推荐”里搜索朋友的账号名吧。';
         else copy.textContent = '还没有待处理的好友申请。';
         empty.append(face, copy);
