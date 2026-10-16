@@ -702,7 +702,7 @@ app.get('/api/posts', requireAuth, (req, res) => {
       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = ?) AS liked
     FROM posts p JOIN users u ON u.id = p.user_id
     WHERE ${where}
-    ORDER BY p.created_at DESC LIMIT 50
+    ORDER BY p.created_at DESC LIMIT 20
   `).all(...params);
   const mediaMap = postMediaFor(rows.map((r) => r.id), userId);
   const posts = rows.map((post) => ({
