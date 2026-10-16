@@ -1108,7 +1108,10 @@
       });
       // 打开时一定到底；有对方新消息时也到底；自己在上面翻历史时不抢滚动。
       if (!appendOnly || wasAtBottom || hasNewFromOther) {
-        requestAnimationFrame(function () { host.scrollTop = host.scrollHeight; });
+        var _scrollBottom = function () { host.scrollTop = host.scrollHeight; };
+        requestAnimationFrame(_scrollBottom);
+        setTimeout(_scrollBottom, 50);
+        setTimeout(_scrollBottom, 200);
       }
       if (hasNewFromOther) {
         try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
@@ -1121,6 +1124,8 @@
     dmState.currentOther = otherUser;
     showPageView('dm-chat');
     const view = pageViewEl();
+    view.style.paddingBottom = '0';
+    view.style.paddingTop = '0';
     const chat = document.createElement('div');
     chat.className = 'dm-page-chat';
     chat.appendChild(pageHead((otherUser && otherUser.displayName) || '私信', '返回', openDmList));
@@ -1154,6 +1159,7 @@
   }
   function closeDmChat() {
     if (pageViewState.name !== 'dm-chat') return;
+    const _v = pageViewEl(); if (_v) { _v.style.paddingBottom = ''; _v.style.paddingTop = ''; }
     if (dmState.chatTimer) { clearInterval(dmState.chatTimer); dmState.chatTimer = null; }
     dmState.currentId = null;
     dmState.currentOther = null;
