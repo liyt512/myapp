@@ -1144,21 +1144,7 @@
     form.addEventListener('submit', function (event) { event.preventDefault(); sendDmMessage(); });
     chat.appendChild(form);
     view.appendChild(chat);
-    // 键盘弹起时用 visualViewport 高度重设聊天框高度（dvh 在 Android 上不随键盘变，adjustResize  alone 不够）。
-    if (window.visualViewport) {
-      var _vvHandler = function () {
-        var vh = window.visualViewport.height;
-        // 底部导航约 60px + 顶栏约 120px，聊天框高度 = 可视高度 - 180
-        var h = Math.max(240, vh - 180);
-        chat.style.height = h + 'px';
-        var msgs = document.getElementById('dmMessages');
-        if (msgs) msgs.scrollTop = msgs.scrollHeight;
-      };
-      window.visualViewport.addEventListener('resize', _vvHandler);
-      window.visualViewport.addEventListener('scroll', _vvHandler);
-      chat._vvHandler = _vvHandler;
-      _vvHandler();
-    }
+    // 原生已用 IME 高度改 WebView 高度，这里只在聚焦时滚到底，不要再改 chat 高度，否则会和原生重复顶起、留一大段空白。
     input.addEventListener('focus', function () { setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 300); });
     await loadDmMessages(false);
     try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
