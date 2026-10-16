@@ -328,7 +328,7 @@
       '.page-view .profile-page{width:100%;height:auto;max-height:none;background:transparent;border:0;border-radius:0;overflow:visible;padding:0;box-shadow:none}',
       '.page-view .profile-page-head{display:none}',
       '.dm-page-list{overflow:visible}',
-      '.dm-page-chat{display:flex;flex-direction:column;height:100%;overflow:hidden}',
+      '.dm-page-chat{display:flex;flex-direction:column;height:100dvh;overflow:hidden}',
       '.dm-page-messages{flex:1;overflow-y:auto;padding:14px 0;display:flex;flex-direction:column;gap:8px}',
       '.dm-page-input{display:flex;gap:8px;padding:12px 0; border-top:1px solid var(--line);background:#f6f6f4;position:static}',
       '.dm-page-input input{flex:1;min-width:0;border:1px solid var(--line);border-radius:18px;padding:10px 13px;outline:none;background:#fff}',
@@ -1124,8 +1124,12 @@
     dmState.currentOther = otherUser;
     showPageView('dm-chat');
     const view = pageViewEl();
-    view.style.paddingBottom = '0';
-    view.style.paddingTop = '0';
+    view.style.padding = '0';
+    view.style.position = 'fixed';
+    view.style.inset = '0';
+    view.style.maxWidth = 'none';
+    view.style.zIndex = '20';
+    view.style.background = '#f6f6f4';
     const chat = document.createElement('div');
     chat.className = 'dm-page-chat';
     chat.appendChild(pageHead((otherUser && otherUser.displayName) || '私信', '返回', openDmList));
@@ -1152,6 +1156,7 @@
     // 原生已用 IME 高度改 WebView 高度，这里只在聚焦时滚到底，不要再改 chat 高度，否则会和原生重复顶起、留一大段空白。
     input.addEventListener('focus', function () { setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 300); });
     await loadDmMessages(false);
+    setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 400);
     try { await request('/api/dm/conversations/' + dmState.currentId + '/read', { method: 'POST' }); } catch (_) {}
     await refreshDmUnread();
     if (dmState.chatTimer) clearInterval(dmState.chatTimer);
@@ -1159,7 +1164,7 @@
   }
   function closeDmChat() {
     if (pageViewState.name !== 'dm-chat') return;
-    const _v = pageViewEl(); if (_v) { _v.style.paddingBottom = ''; _v.style.paddingTop = ''; }
+    const _v = pageViewEl(); if (_v) { _v.style.padding = ''; _v.style.position = ''; _v.style.inset = ''; _v.style.maxWidth = ''; _v.style.zIndex = ''; _v.style.background = ''; }
     if (dmState.chatTimer) { clearInterval(dmState.chatTimer); dmState.chatTimer = null; }
     dmState.currentId = null;
     dmState.currentOther = null;
@@ -1179,6 +1184,7 @@
       await request('/api/dm/conversations/' + dmState.currentId + '/messages', { method: 'POST', body: { text: text } });
       input.value = '';
       await loadDmMessages(false);
+    setTimeout(function () { var m = document.getElementById('dmMessages'); if (m) m.scrollTop = m.scrollHeight; }, 400);
     } catch (error) { toast(error.message); }
     finally { dmState.sending = false; sendBtn.disabled = false; }
   }
