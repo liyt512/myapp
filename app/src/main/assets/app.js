@@ -256,7 +256,7 @@
   function installStyle() {
     const style = document.createElement('style');
     style.textContent = [
-      '.avatar-mark{display:grid;place-items:center;flex:none;background:#171717;color:#fff;font-size:10px;font-weight:700;letter-spacing:-1px;border:1px solid #171717}',
+      '.avatar-mark{display:grid;place-items:center;flex:none;background:#171717;color:#F2F3F5;font-size:10px;font-weight:700;letter-spacing:-1px;border:1px solid #171717}',
       '.auth-backdrop,.account-backdrop{position:fixed;inset:0;background:#0009;z-index:100;display:none;align-items:center;justify-content:center;padding:20px}',
       '.auth-backdrop.open,.account-backdrop.open{display:flex}',
       '.auth-card,.account-card{background:#f6f6f4;border:1px solid #171717;border-radius:24px;width:min(430px,100%);padding:25px;box-shadow:0 24px 90px #0004}',
