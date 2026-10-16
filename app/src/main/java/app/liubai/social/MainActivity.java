@@ -91,7 +91,8 @@ public class MainActivity extends Activity {
             if (lp != null) {
                 int screenH = getResources().getDisplayMetrics().heightPixels;
                 int newH = imeBottom > 0 ? Math.max(300, screenH - imeBottom) : android.view.ViewGroup.LayoutParams.MATCH_PARENT;
-                if (lp.height != newH) { lp.height = newH; view.setLayoutParams(lp); }
+                // 只在变化超过 10px 时才改，避免 insets 回调循环导致加载变慢。
+                if (Math.abs(lp.height - newH) > 10) { lp.height = newH; view.setLayoutParams(lp); }
             }
             view.setPadding(0, 0, 0, bottom);
             // 同步把高度灌进网页，供首页 sticky 顶栏的 top / padding 使用。
