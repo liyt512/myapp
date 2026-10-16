@@ -86,7 +86,14 @@ public class MainActivity extends Activity {
                 // API <30 时 ime 包含在 systemWindowInsetBottom 里，上面 bottom 已包含它，不重复加。
                 imeBottom = 0;
             }
-            view.setPadding(0, 0, 0, bottom + imeBottom);
+            // 用 LayoutParams 改高度比 padding 更可靠：WebView 里 dvh 不随 padding 变，但改 View 高度会真缩小视口。
+            android.view.ViewGroup.LayoutParams lp = view.getLayoutParams();
+            if (lp != null) {
+                int screenH = getResources().getDisplayMetrics().heightPixels;
+                int newH = imeBottom > 0 ? Math.max(300, screenH - imeBottom) : android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+                if (lp.height != newH) { lp.height = newH; view.setLayoutParams(lp); }
+            }
+            view.setPadding(0, 0, 0, bottom);
             // 同步把高度灌进网页，供首页 sticky 顶栏的 top / padding 使用。
             applyStatusBarHeight(top);
             return insets;
