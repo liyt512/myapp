@@ -76,7 +76,17 @@ public class MainActivity extends Activity {
             // 顶部不设 WebView padding，顶部由 CSS 的 --status-bar-height 处理。
             // 若这里也设 top，会和 CSS 的 padding-top / height 双重叠加，顶栏上方多出一大块白边。
             // 底部保留 bottom，避免系统导航栏盖住底部导航。
-            view.setPadding(0, 0, 0, bottom);
+            // 键盘：edge-to-edge 下 adjustResize 不生效，必须在这里用 IME insets 手动顶起 WebView。
+            // 键盘高度 = ime 底部，否则 WebView 不会缩小，JS 里的 visualViewport 也拿不到正确高度。
+            int imeBottom = 0;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                imeBottom = ime.bottom;
+            } else {
+                // API <30 时 ime 包含在 systemWindowInsetBottom 里，上面 bottom 已包含它，不重复加。
+                imeBottom = 0;
+            }
+            view.setPadding(0, 0, 0, bottom + imeBottom);
             // 同步把高度灌进网页，供首页 sticky 顶栏的 top / padding 使用。
             applyStatusBarHeight(top);
             return insets;
